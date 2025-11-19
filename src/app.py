@@ -71,28 +71,24 @@ class RoleplayMem0App:
     
     @performance_monitor.timeit
     def search_memories(self, query: str, user_id: str, 
-                       min_importance: Optional[str] = None,
-                       exclude_deleted: bool = True,
-                       category_filter: Optional[str] = None) -> Dict[str, Any]:
+                    min_importance: Optional[str] = None,
+                    exclude_deleted: bool = True,
+                    category_filter: Optional[str] = None,
+                    limit: Optional[int] = None) -> Dict[str, Any]:  # 添加 limit 参数
         """
         搜索记忆（支持分类过滤）
-        
-        Args:
-            query: 搜索查询
-            user_id: 用户ID
-            min_importance: 最小重要性级别
-            exclude_deleted: 是否排除已删除记忆
-            category_filter: 按分类过滤
-            
-        Returns:
-            搜索结果
         """
         if category_filter:
             # 使用分类搜索
             return self.smm.search_by_category(category_filter, user_id)
         else:
             # 使用智能搜索
-            return self.smm.search_smart(query, user_id, min_importance, exclude_deleted)
+            results = self.smm.search_smart(query, user_id, min_importance, exclude_deleted)
+            # 应用 limit 限制
+            if limit and len(results['results']) > limit:
+                results['results'] = results['results'][:limit]
+                results['total_count'] = limit
+            return results
     
     @performance_monitor.timeit
     def update_memory(self, search_query: str, new_content: str, user_id: str,

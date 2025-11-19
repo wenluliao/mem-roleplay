@@ -1,7 +1,8 @@
-from .smart_memory_manager import SmartMemoryManager
-from .config import config
 import time
 import json
+from .smart_memory_manager import SmartMemoryManager
+from .config import config
+from .redis_memory_queue import RedisMemoryQueue
 
 class RoleplaySmartMemoryManager(SmartMemoryManager):
     """角色扮演专用的智能记忆管理器 - 完整版"""
@@ -18,13 +19,19 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
             'interaction': '互动交流'
         }
         self.use_async = use_async
+        self._processing_started = False  # 添加状态标志
+        
         if use_async:
-            # 使用Redis队列（暂时禁用，因为RedisMemoryQueue类未实现）
-            print("⚠️  异步处理功能暂时不可用，使用同步处理模式")
-            # self.async_processor = RedisMemoryQueue(self)
-            # import threading
-            # self.process_thread = threading.Thread(target=self.async_processor.start_processing, daemon=True)
-            # self.process_thread.start()
+            print("🔄 启用异步处理模式")
+            self.async_processor = RedisMemoryQueue(self)
+            import threading
+            if not self._processing_started:  # 检查是否已启动
+                self.process_thread = threading.Thread(
+                    target=self.async_processor.start_processing, 
+                    daemon=True
+                )
+                self.process_thread.start()
+                self._processing_started = True
     
     def add_conversation_with_roleplay_classification(self, messages, user_id):
         """
@@ -185,13 +192,14 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
         }}"""
 
     def _call_llm_for_roleplay_classification(self, prompt_content):
-        """调用LLM进行角色扮演分类 - 真实实现"""
+        """调用LLM进行角色扮演分类 - 兼容各种格式的响应"""
         try:
             print("🤖 正在调用LLM进行角色扮演分类...")
             
             # 导入必要的模块
             from openai import OpenAI
             import json
+            import re
             
             # 创建OpenAI客户端
             client = OpenAI(
@@ -205,7 +213,7 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
                 messages=[
                     {
                         "role": "system",
-                        "content": "你是一个专业的角色扮演记忆分类专家，请严格按照要求的JSON格式返回结果。"
+                        "content": "你是一个专业的角色扮演记忆分类专家，请严格按照要求的JSON格式返回结果，不要添加任何额外的格式标记、代码块符号或解释文字。"
                     },
                     {
                         "role": "user", 
@@ -221,25 +229,152 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
             response_content = response.choices[0].message.content
             print(f"📄 LLM原始响应: {response_content}")
             
-            # 解析JSON
-            try:
-                result = json.loads(response_content)
-                
-                # 验证结果格式
-                if "facts" in result and isinstance(result["facts"], list):
-                    print(f"✅ LLM分类成功，提取到 {len(result['facts'])} 条事实")
-                    return result
-                else:
-                    print("❌ LLM返回格式不正确")
-                    return {"facts": []}
-                    
-            except json.JSONDecodeError as e:
-                print(f"❌ JSON解析失败: {e}")
+            # 多层级解析JSON响应
+            result = self._parse_llm_response(response_content)
+            
+            # 验证结果格式
+            if result and "facts" in result and isinstance(result["facts"], list):
+                print(f"✅ LLM分类成功，提取到 {len(result['facts'])} 条事实")
+                return result
+            else:
+                print("❌ LLM返回格式不正确或解析失败")
                 return {"facts": []}
                 
         except Exception as e:
             print(f"❌ LLM调用失败: {e}")
+            import traceback
+            print(f"详细错误: {traceback.format_exc()}")
             return {"facts": []}
+
+    def _parse_llm_response(self, response_content):
+        """
+        解析LLM响应，兼容多种格式
+        
+        Args:
+            response_content: LLM返回的原始内容
+            
+        Returns:
+            解析后的JSON对象或None
+        """
+        import json
+        import re
+        
+        # 如果响应已经是干净的JSON，直接解析
+        try:
+            return json.loads(response_content)
+        except json.JSONDecodeError:
+            pass
+        
+        # 方法1: 提取代码块中的JSON
+        code_block_patterns = [
+            r'```json\s*(.*?)\s*```',  # ```json { ... } ```
+            r'```\s*(.*?)\s*```',      # ``` { ... } ```
+        ]
+        
+        for pattern in code_block_patterns:
+            match = re.search(pattern, response_content, re.DOTALL)
+            if match:
+                try:
+                    json_str = match.group(1).strip()
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    continue
+        
+        # 方法2: 提取最外层的大括号内容
+        brace_pattern = r'\{.*\}'  # 匹配最外层的大括号
+        match = re.search(brace_pattern, response_content, re.DOTALL)
+        if match:
+            try:
+                json_str = match.group(0).strip()
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+        
+        # 方法3: 尝试直接解析整个响应（处理包裹的响应对象）
+        try:
+            # 如果响应是完整的日志对象，尝试提取内部的response字段
+            full_response = json.loads(response_content)
+            if isinstance(full_response, dict) and "response" in full_response:
+                # 递归解析内部的response
+                return self._parse_llm_response(full_response["response"])
+        except json.JSONDecodeError:
+            pass
+        
+        # 方法4: 手动清理和修复常见的格式问题
+        cleaned_content = response_content
+        
+        # 移除常见的非JSON前缀和后缀
+        prefixes_to_remove = [
+            "以下是分类结果：",
+            "分类结果：",
+            "结果：",
+            "根据对话内容，我提取了以下事实：",
+        ]
+        
+        suffixes_to_remove = [
+            "以上是根据对话内容提取的事实。",
+            "希望这个分类结果对您有帮助。",
+            "这就是我的分析结果。",
+        ]
+        
+        for prefix in prefixes_to_remove:
+            if cleaned_content.startswith(prefix):
+                cleaned_content = cleaned_content[len(prefix):].strip()
+        
+        for suffix in suffixes_to_remove:
+            if cleaned_content.endswith(suffix):
+                cleaned_content = cleaned_content[:-len(suffix)].strip()
+        
+        # 再次尝试解析清理后的内容
+        try:
+            return json.loads(cleaned_content)
+        except json.JSONDecodeError:
+            pass
+        
+        # 方法5: 最后尝试 - 查找并提取JSON对象
+        # 使用更宽松的模式匹配可能的JSON对象
+        json_pattern = r'\{\s*"facts"\s*:\s*\[.*?\]\s*\}'
+        match = re.search(json_pattern, response_content, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+        
+        print(f"❌ 无法解析LLM响应: {response_content}")
+        return None
+
+    def _extract_json_from_wrapped_response(self, wrapped_response):
+        """
+        专门处理被包装的响应对象（如您提供的示例格式）
+        
+        Args:
+            wrapped_response: 包含完整日志信息的响应对象
+            
+        Returns:
+            提取的JSON内容或None
+        """
+        import json
+        
+        try:
+            # 如果是完整的响应对象
+            if isinstance(wrapped_response, dict):
+                # 检查是否有response字段
+                if "response" in wrapped_response:
+                    response_content = wrapped_response["response"]
+                    # 从response字段中提取JSON
+                    return self._parse_llm_response(response_content)
+                # 检查是否有直接的结果字段
+                elif "result" in wrapped_response:
+                    return self._parse_llm_response(wrapped_response["result"])
+            # 如果是字符串，尝试解析
+            elif isinstance(wrapped_response, str):
+                parsed = json.loads(wrapped_response)
+                return self._extract_json_from_wrapped_response(parsed)
+        except (json.JSONDecodeError, AttributeError) as e:
+            print(f"❌ 提取包装响应失败: {e}")
+        
+        return None
 
     def get_memories_by_roleplay_category(self, user_id, category):
         """按角色扮演分类获取记忆"""
@@ -463,3 +598,46 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
                 print(f"❌ 添加记忆失败: {e}")
         
         return results
+
+    def search_roleplay_memories(self, user_id: str, query: str, category: str = None, limit: int = 10):
+        """
+        搜索角色扮演记忆
+        
+        Args:
+            user_id: 用户ID
+            query: 搜索查询
+            category: 分类过滤（可选）
+            limit: 结果数量限制
+            
+        Returns:
+            搜索结果列表
+        """
+        try:
+            print(f"🔍 搜索角色扮演记忆: 用户={user_id}, 查询='{query}', 分类={category}")
+            
+            # 使用父类的智能搜索方法
+            search_results = self.search_smart(query, user_id, exclude_deleted=True)
+            
+            # 过滤角色扮演相关的记忆
+            roleplay_results = []
+            for item in search_results.get('results', []):
+                metadata = item.get('metadata', {})
+                
+                # 检查是否是角色扮演记忆
+                if metadata.get('roleplay_context', False):
+                    # 如果指定了分类，进行过滤
+                    if category and metadata.get('category') != category:
+                        continue
+                    
+                    roleplay_results.append(item)
+                    
+                    # 达到限制数量时停止
+                    if len(roleplay_results) >= limit:
+                        break
+            
+            print(f"✅ 搜索完成: 找到 {len(roleplay_results)} 条角色扮演记忆")
+            return roleplay_results
+            
+        except Exception as e:
+            print(f"❌ 搜索角色扮演记忆失败: {e}")
+            return []
