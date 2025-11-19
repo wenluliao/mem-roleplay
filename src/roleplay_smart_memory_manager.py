@@ -6,7 +6,7 @@ import json
 class RoleplaySmartMemoryManager(SmartMemoryManager):
     """角色扮演专用的智能记忆管理器 - 完整版"""
     
-    def __init__(self, memory_client=None):
+    def __init__(self, memory_client=None, use_async=False):
         super().__init__(memory_client)
         self.roleplay_categories = {
             'profile': '用户档案',
@@ -17,6 +17,14 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
             'event': '事件',
             'interaction': '互动交流'
         }
+        self.use_async = use_async
+        if use_async:
+            # 使用Redis队列（暂时禁用，因为RedisMemoryQueue类未实现）
+            print("⚠️  异步处理功能暂时不可用，使用同步处理模式")
+            # self.async_processor = RedisMemoryQueue(self)
+            # import threading
+            # self.process_thread = threading.Thread(target=self.async_processor.start_processing, daemon=True)
+            # self.process_thread.start()
     
     def add_conversation_with_roleplay_classification(self, messages, user_id):
         """
@@ -41,33 +49,28 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
             print(f"  📁 {fact['category']} | ⚡ {fact['importance']} | {fact['content']}")
             if 'reasoning' in fact:
                 print(f"     💡 {fact['reasoning']}")
-        
-        # 添加记忆到系统
-        added_count = 0
-        for fact in classified_facts["facts"]:
-            metadata = {
-                "category": fact["category"],
-                "importance": fact["importance"], 
-                "classification_reasoning": fact.get("reasoning", "auto_classified"),
-                "memory_type": "long_term" if fact["importance"] in ["high", "medium"] else "short_term",
-                "roleplay_context": True,
-                "auto_classified": True
+
+        # 批量添加记忆
+        if self.use_async and hasattr(self, 'async_processor'):
+            # 异步处理
+            self.async_processor.add_memories(classified_facts["facts"], user_id)
+            return {
+                "classified_facts": classified_facts,
+                "processing_mode": "async",
+                "queue_stats": self.async_processor.get_queue_stats(),
+                "classification_time": classification_time
             }
-            
-            try:
-                self.memory.add(fact["content"], user_id=user_id, metadata=metadata,infer=False)
-                added_count += 1
-            except Exception as e:
-                print(f"❌ 添加记忆失败: {e}")
+        else:
+            # 同步处理
+            result = self.add_roleplay_memories_batch(classified_facts["facts"], user_id)
+            total_time = time.time() - start_time
+            return {
+                "classified_facts": classified_facts,
+                "processing_mode": "sync",
+                "added_count": result["added_count"],
+                "total_time": total_time
+            }
         
-        total_time = time.time() - start_time
-        print(f"✅ 角色扮演记忆添加完成: {added_count} 条，总耗时: {total_time:.2f}s")
-        
-        return {
-            "classified_facts": classified_facts,
-            "added_count": added_count,
-            "total_time": total_time
-        }
 
     def _extract_roleplay_facts(self, user_messages):
         """提取角色扮演专用事实 - 保留完整对话上下文"""
@@ -281,3 +284,182 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
             "behavioral_details": behavioral_memories,
             "scenario_details": scenario_memories
         }
+
+    def add_roleplay_memories_batch(self, facts_list, user_id):
+        """批量添加角色扮演记忆 - 优化版本"""
+        if not facts_list:
+            return {"results": [], "added_count": 0}
+        
+        print(f"🎭 批量处理 {len(facts_list)} 条角色扮演记忆...")
+        start_time = time.time()
+        
+        # 批量处理记忆
+        try:
+            # 构建批量消息
+            batch_messages = []
+            for fact in facts_list:
+                metadata = {
+                    "category": fact["category"],
+                    "importance": fact["importance"], 
+                    "classification_reasoning": fact.get("reasoning", "auto_classified"),
+                    "memory_type": "long_term" if fact["importance"] in ["high", "medium"] else "short_term",
+                    "roleplay_context": True,
+                    "auto_classified": True
+                }
+                
+                batch_messages.append({
+                    "content": fact["content"],
+                    "user_id": user_id,
+                    "metadata": metadata
+                })
+            
+            # 批量添加到向量存储
+            results = self._batch_add_to_vector_store(batch_messages)
+            
+            total_time = time.time() - start_time
+            added_count = len([r for r in results if r.get('event') == 'ADD'])
+            
+            print(f"✅ 批量处理完成: {added_count} 条新增，总耗时: {total_time:.2f}s")
+            
+            return {
+                "results": results,
+                "added_count": added_count,
+                "total_time": total_time
+            }
+            
+        except Exception as e:
+            print(f"❌ 批量处理失败: {e}")
+            return {"results": [], "added_count": 0}
+
+    def _batch_add_to_vector_store(self, batch_messages, infer=True):
+        """批量添加到向量存储 - 参考mem0但支持批量LLM处理"""
+        if not infer:
+            # 如果不推理，直接添加
+            return self._batch_add_directly(batch_messages)
+        
+        # 批量LLM推理
+        return self._batch_infer_and_add(batch_messages)
+
+    def _batch_infer_and_add(self, batch_messages, batch_size=5):
+        """批量LLM推理和添加"""
+        all_results = []
+        
+        # 分批处理，避免一次处理太多
+        for i in range(0, len(batch_messages), batch_size):
+            batch = batch_messages[i:i + batch_size]
+            print(f"🔍 处理批次 {i//batch_size + 1}: {len(batch)} 条记忆")
+            
+            # 构建批量提示词
+            batch_prompt = self._create_batch_inference_prompt(batch)
+            
+            # 调用LLM进行批量推理
+            batch_results = self._batch_llm_inference(batch_prompt, batch)
+            all_results.extend(batch_results)
+        
+        return all_results
+
+    def _create_batch_inference_prompt(self, batch_messages):
+        """创建批量推理提示词"""
+        memory_list = []
+        for i, msg in enumerate(batch_messages, 1):
+            memory_list.append(f"{i}. 内容: {msg['content']}")
+            memory_list.append(f"   元数据: 分类={msg['metadata'].get('category')}, 重要性={msg['metadata'].get('importance')}")
+            memory_list.append("")
+        
+        prompt = f"""你是一个记忆管理系统，需要判断以下记忆是否需要添加、更新或删除。
+
+    ## 现有记忆分析规则：
+    1. **ADD（新增）**: 如果记忆内容全新且与现有记忆不重复
+    2. **UPDATE（更新）**: 如果记忆与现有记忆相似但包含新信息
+    3. **DELETE（删除）**: 如果记忆与现有记忆完全重复或信息过时
+    4. **NOOP（无操作）**: 如果记忆质量差或无法处理
+
+    ## 待处理记忆列表：
+    {"\n".join(memory_list)}
+
+    ## 输出要求：
+    请按以下JSON格式返回处理结果：
+    {{
+    "results": [
+        {{
+        "index": 1,
+        "content": "原始内容",
+        "event": "ADD/UPDATE/DELETE/NOOP",
+        "reasoning": "处理理由",
+        "updated_content": "如果是UPDATE，提供更新后的内容"
+        }}
+    ]
+    }}
+
+    请基于记忆内容和元数据进行智能判断。"""
+        
+        return prompt
+
+    def _batch_llm_inference(self, prompt, batch_messages):
+        """批量LLM推理"""
+        try:
+            from openai import OpenAI
+            import json
+            
+            client = OpenAI(
+                base_url=config.get_llm_config()["config"]["openai_base_url"],
+                api_key=config.get_llm_config()["config"]["api_key"]
+            )
+            
+            response = client.chat.completions.create(
+                model=config.get_llm_config()["config"]["model"],
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "你是记忆管理专家，负责批量处理记忆的添加、更新和删除。"
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.1,
+                max_tokens=2000,
+                response_format={"type": "json_object"}
+            )
+            
+            result = json.loads(response.choices[0].message.content)
+            
+            # 将LLM结果转换为mem0格式
+            formatted_results = []
+            for item in result.get("results", []):
+                index = item.get("index", 1) - 1  # 转换为0-based索引
+                if 0 <= index < len(batch_messages):
+                    original_msg = batch_messages[index]
+                    formatted_results.append({
+                        "id": f"batch_{index}",
+                        "memory": item.get("content", original_msg["content"]),
+                        "event": item.get("event", "ADD"),
+                        "metadata": original_msg["metadata"],
+                        "reasoning": item.get("reasoning", "")
+                    })
+            
+            return formatted_results
+            
+        except Exception as e:
+            print(f"❌ 批量LLM推理失败: {e}")
+            # 失败时默认全部添加
+            return self._batch_add_directly(batch_messages)
+
+    def _batch_add_directly(self, batch_messages):
+        """直接批量添加（无推理）"""
+        results = []
+        for msg in batch_messages:
+            try:
+                # 使用mem0的直接添加
+                result = self.memory.add(
+                    msg["content"],
+                    user_id=msg["user_id"],
+                    metadata=msg["metadata"],
+                    infer=False
+                )
+                results.extend(result.get("results", []))
+            except Exception as e:
+                print(f"❌ 添加记忆失败: {e}")
+        
+        return results

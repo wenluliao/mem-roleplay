@@ -14,18 +14,23 @@
 - **角色档案构建**: 自动构建用户角色档案和行为模式
 - **场景上下文管理**: 维护角色扮演的完整上下文信息
 - **内心活动记录**: 捕捉用户的真实想法和情感变化
+- **冲突检测机制**: 智能识别重复或冲突记忆，支持更新而非覆盖
+- **批量异步处理**: 支持Redis队列异步处理记忆批次
 
 ### 🔧 技术特性
 - **多LLM支持**: 支持DeepSeek V3.2、Ollama等多种LLM后端
 - **智能向量检索**: 基于语义的智能记忆搜索和匹配
 - **性能监控**: 内置性能监控和优化工具
 - **模块化架构**: 清晰的代码结构，易于扩展和维护
+- **异步任务队列**: 基于Celery+Redis的异步处理架构
+- **批量LLM推理**: 批量处理记忆减少API调用开销
 
 ### 📊 记忆管理
 - **7种记忆分类**: profile、behavioral_patterns、internal_monologue等
 - **重要性分级**: 高、中、低三级重要性标记
 - **生命周期管理**: 支持记忆更新、删除、清理、合并
 - **访问统计**: 详细的记忆访问和使用统计
+- **智能处理策略**: ADD/UPDATE/DELETE/NOOP四种处理模式
 
 ## 🚀 快速开始
 
@@ -178,6 +183,40 @@ deleted_count = app.force_delete_memory("测试数据", "time_traveler_001")
 print(f"💥 强制删除: {deleted_count} 条记忆")
 ```
 
+### 异步记忆处理
+
+```python
+# 启用异步处理（需要Redis服务）
+app = Mem0App(use_async=True)
+
+# 添加对话，自动使用异步队列
+result = app.add_conversation(
+    roleplay_messages, 
+    user_id="async_user",
+    enable_roleplay_classification=True
+)
+
+print(f"📤 异步任务ID: {result.get('task_id')}")
+print(f"处理模式: {result.get('processing_mode')}")
+```
+
+### 智能冲突检测
+
+```python
+# 添加可能冲突的记忆
+conflicting_messages = [
+    {"role": "user", "content": "我喜欢科幻题材"},
+    {"role": "user", "content": "我其实更喜欢奇幻题材"}
+]
+
+# 系统会自动检测冲突并智能处理
+result = app.add_conversation(conflicting_messages, "conflict_test", True)
+
+# 查看处理结果
+for fact in result["classified_facts"]["facts"]:
+    print(f"{fact['category']}: {fact['content']} -> {fact.get('processing', 'ADD')}")
+```
+
 ## 🏗️ 项目架构
 
 ```
@@ -185,8 +224,9 @@ mem0ai/
 ├── src/                           # 源代码目录
 │   ├── config.py                 # 配置管理（支持DeepSeek V3.2）
 │   ├── app.py                    # 主应用类（角色扮演优化版）
-│   ├── roleplay_smart_memory_manager.py  # 角色扮演记忆管理器
+│   ├── roleplay_smart_memory_manager.py  # 角色扮演记忆管理器（含冲突检测）
 │   ├── smart_memory_manager.py   # 基础记忆管理器
+│   ├── tasks.py                  # Celery异步任务定义
 │   └── utils.py                  # 工具函数和性能监控
 ├── test/                         # 测试目录
 │   ├── test_ollama.py            # Ollama集成测试
@@ -274,6 +314,28 @@ OLLAMA_BASE_URL="http://localhost:11434"
 # 应用配置
 DEBUG="true"
 LOG_LEVEL="INFO"
+
+# Celery异步任务配置
+CELERY_BROKER_URL="redis://:password@host:port/db"
+CELERY_RESULT_BACKEND="redis://:password@host:port/db"
+```
+
+### 异步任务配置
+
+```python
+# tasks.py - Celery任务定义示例
+from celery import Celery
+
+# 配置Celery应用
+celery_app = Celery('memory_tasks', 
+                    broker='redis://localhost:6379/0',
+                    backend='redis://localhost:6379/0')
+
+@celery_app.task
+def process_memory_batch_async(batch_data):
+    """异步处理记忆批次"""
+    # 实现批量记忆处理逻辑
+    return {"success": True, "processed_count": len(batch_data["facts"])}
 ```
 
 ## 🔍 开发指南

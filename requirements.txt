@@ -9,6 +9,7 @@ chromadb>=0.4.0
 
 # 工具依赖
 python-dotenv>=1.0.0
+celery>=5.0.0
 
 # 开发依赖（可选）
 pytest>=7.0.0
