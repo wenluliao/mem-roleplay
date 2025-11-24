@@ -358,27 +358,31 @@ def quick_test(base_url: str = "http://localhost:8000"):
         print("❌ 服务不可用")
         return
     
-    # 快速添加测试
-    messages = [
-        {"role": "user", "content": "快速测试 - 我喜欢编程"},
-        {"role": "assistant", "content": "编程很有趣！"}
-    ]
+    # # 快速添加测试
+    # messages = [
+    #     {"role": "user", "content": "我平常爱看电影，要不下周一起看电影把"},
+    #     {"role": "assistant", "content": "好的呀，你喜欢看什么电影"},
+    #     {"role": "user", "content": "我喜欢看漫威系列，比如钢铁侠"},
+    #     {"role": "assistant", "content": "我也很喜欢，那我们到时候一起吧"},
+    #     {"role": "user", "content": "今天他天气好冷啊"},
+    #     {"role": "assistant", "content": "那你要多穿点衣服噢"}
+    # ]
     
-    print("📝 添加测试对话...")
-    result = client.add_conversation("quick_user", messages)
-    print(f"添加结果: {json.dumps(result, ensure_ascii=False, indent=2)}\n")
+    # print("📝 添加测试对话...")
+    # result = client.add_conversation("quick_user", messages)
+    # print(f"添加结果: {json.dumps(result, ensure_ascii=False, indent=2)}\n")
     
-    # 等待处理
-    time.sleep(1)
+    # # 等待处理
+    # time.sleep(1)
     
     # 搜索测试
     print("🔍 搜索测试...")
-    results = client.search_memory("quick_user", "编程")
-    print(f"搜索结果: {results.get('total_count', 0)} 条记忆\n")
+    results = client.search_memory("test_user_002", "早啊。昨晚为什么没给我打电话。是不是把我电话忘了")
+    print(f"搜索结果: {json.dumps(results, ensure_ascii=False, indent=2)}\n")
     
     # 队列状态
-    queue_status = client.get_queue_status()
-    print(f"📊 队列状态: {json.dumps(queue_status, ensure_ascii=False, indent=2)}\n")
+    # queue_status = client.get_queue_status()
+    # print(f"📊 队列状态: {json.dumps(queue_status, ensure_ascii=False, indent=2)}\n")
     
     print("✅ 快速测试完成！")
 

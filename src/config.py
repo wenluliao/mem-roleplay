@@ -36,6 +36,28 @@ class Config:
                     "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
                 }
             },
+            "reranker": {
+                "provider": "llm_reranker",
+                "config": {
+                    "llm": {
+                        "provider": "openai",
+                        "config": {
+                            "model": "THUDM/GLM-4-9B-0414",
+                            "api_key": os.getenv("OPENAI_API_KEY"),
+                            "openai_base_url": openai_base_url
+                        }
+                    },
+                    "model": "THUDM/GLM-4-9B-0414",
+                    "top_k": 5
+                }
+            },
+            # "embedder": {
+            #     "provider": "openai",
+            #     "config": {
+            #         "model": os.getenv("EMBEDDER_MODEL", "Qwen/Qwen3-Embedding-8B"),
+            #         "openai_base_url": openai_base_url
+            #     }
+            # },
             # "reranker": {
             #     "provider": "llm_reranker",
             #     "config": {

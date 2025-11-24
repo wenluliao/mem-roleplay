@@ -167,7 +167,6 @@ def main():
                 print("\n❌ 快速测试失败")
         finally:
             print("\n🛑 停止Web服务...")
-            process.terminate()
     
     elif choice == "3":
         # 模式3：连接到已运行的服务

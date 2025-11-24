@@ -6,6 +6,8 @@ import logging
 from typing import Dict, Any, List, Optional  # 添加 Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 from contextlib import asynccontextmanager
@@ -47,6 +49,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 添加静态文件服务
+app.mount("/static", StaticFiles(directory="templates", html=True), name="static")
+
 # 全局应用实例
 mem0_app = None
 roleplay_manager = None
@@ -54,17 +59,34 @@ roleplay_manager = None
 
 class ConversationRequest(BaseModel):
     """对话请求模型"""
+    conversation: List[Dict[str, str]]  # 兼容调用方的conversation字段
     user_id: str
-    dialogue: List[Dict[str, str]]
+    user_name: Optional[str] = None
+    agent_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    session_date: Optional[str] = None
     use_async: bool = True
+    
+    # 兼容dialogue字段（如果调用方使用dialogue而不是conversation）
+    @property
+    def dialogue(self) -> List[Dict[str, str]]:
+        return self.conversation
 
 
 class MemorySearchRequest(BaseModel):
     """记忆搜索请求模型"""
     user_id: str
     query: str
+    agent_id: Optional[str] = None  # 添加调用方需要的agent_id字段
     category: str = "all"
     limit: int = 10
+
+
+class MemoryQueryRequest(BaseModel):
+    """记忆查询请求模型"""
+    user_id: str
+    category: str = "all"
+    limit: int = 100
 
 
 class HealthResponse(BaseModel):
@@ -87,7 +109,7 @@ class AddMemoryResponse(BaseModel):
 class SearchMemoryResponse(BaseModel):
     """搜索记忆响应模型"""
     status: str
-    results: List[Dict[str, Any]]
+    results: List[Any]
     total_count: int
 
 
@@ -169,11 +191,36 @@ async def health_check():
         raise HTTPException(status_code=500, detail=f"服务异常: {e}")
 
 
+@app.get("/query", response_class=HTMLResponse)
+async def memory_query_page():
+    """记忆查询页面"""
+    try:
+        # 读取HTML文件内容
+        html_file_path = os.path.join("templates", "memory_query.html")
+        with open(html_file_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"加载记忆查询页面失败: {e}")
+        return HTMLResponse(content="<h1>页面加载失败</h1><p>请检查模板文件是否存在</p>", status_code=500)
+
+
 @app.post("/api/v1/conversation/add", response_model=AddMemoryResponse)
 async def add_conversation_memory(request: ConversationRequest):
     """添加对话记忆"""
     try:
         logger.info(f"收到对话记忆添加请求，用户: {request.user_id}, 对话轮次: {len(request.dialogue)}")
+        
+        # 记录额外的请求信息
+        if request.user_name:
+            logger.info(f"用户名称: {request.user_name}")
+        if request.agent_id:
+            logger.info(f"代理ID: {request.agent_id}")
+        if request.agent_name:
+            logger.info(f"代理名称: {request.agent_name}")
+        if request.session_date:
+            logger.info(f"会话日期: {request.session_date}")
         
         manager = get_roleplay_manager()
         result = manager.add_conversation_with_roleplay_classification(
@@ -205,6 +252,33 @@ async def search_memory(request: MemorySearchRequest):
             user_id=request.user_id,
             query=request.query,
             category=request.category if request.category != "all" else None,
+            agent_id=request.agent_id if request.agent_id != "all" else None,
+            limit=request.limit
+        )
+        
+        
+
+        return SearchMemoryResponse(
+            status="success",
+            results=results,
+            total_count=len(results)
+        )
+        
+    except Exception as e:
+        logger.error(f"搜索记忆失败: {e}")
+        raise HTTPException(status_code=500, detail=f"搜索记忆失败: {e}")
+
+
+@app.post("/api/v1/memory/query", response_model=SearchMemoryResponse)
+async def query_memory(request: MemoryQueryRequest):
+    """查询所有记忆（按分类过滤）"""
+    try:
+        logger.info(f"收到记忆查询请求，用户: {request.user_id}, 分类: {request.category}")
+        
+        manager = get_roleplay_manager()
+        results = manager.get_memories(
+            user_id=request.user_id,
+            category=request.category if request.category != "all" else None,
             limit=request.limit
         )
         
@@ -215,8 +289,8 @@ async def search_memory(request: MemorySearchRequest):
         )
         
     except Exception as e:
-        logger.error(f"搜索记忆失败: {e}")
-        raise HTTPException(status_code=500, detail=f"搜索记忆失败: {e}")
+        logger.error(f"查询记忆失败: {e}")
+        raise HTTPException(status_code=500, detail=f"查询记忆失败: {e}")
 
 
 @app.get("/api/v1/queue/status")

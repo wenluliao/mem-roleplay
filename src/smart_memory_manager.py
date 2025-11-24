@@ -372,12 +372,21 @@ class SmartMemoryManager:
     
     @performance_monitor.timeit
     def search_smart(self, query: str, user_id: str, 
+                    category: Optional[str] = None,
+                    agent_id: Optional[str] = None,
                     min_importance: Optional[str] = None, 
-                    exclude_deleted: bool = True) -> Dict[str, Any]:
+                    exclude_deleted: bool = None,
+                    limit: int = 5) -> Dict[str, Any]:
         """
         智能搜索 - 自动排除已删除内容
         """
-        results = self.memory.search(query, user_id=user_id, rerank=False)
+        filterQuery = {}
+        if category:
+            filterQuery['category'] = category
+        # if agent_id:
+        #     filterQuery['agent_id'] = agent_id
+        
+        results = self.memory.search(query, user_id=user_id,filters=filterQuery,limit=limit, rerank=True)
         
         # 严格过滤已删除的记忆
         if exclude_deleted:
