@@ -59,28 +59,17 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
             if 'reasoning' in fact:
                 print(f"     💡 {fact['reasoning']}")
 
-        # 批量添加记忆
-        if self.use_async and hasattr(self, 'async_processor'):
-            # 异步处理
-            self.async_processor.add_memories(classified_facts["facts"], user_id)
-            return {
-                "classified_facts": classified_facts,
-                "processing_mode": "async",
-                "queue_stats": self.async_processor.get_queue_stats(),
-                "classification_time": classification_time
-            }
-        else:
-            # 同步处理
-            result = self.add_roleplay_memories_batch(classified_facts["facts"], user_id)
-            total_time = time.time() - start_time
-            return {
-                "classified_facts": classified_facts,
-                "processing_mode": "sync",
-                "added_count": result["added_count"],
-                "updated_count": result.get("updated_count", 0),
-                "stats": result.get("stats", {}),
-                "total_time": total_time
-            }
+        # 同步处理
+        result = self.add_roleplay_memories_batch(classified_facts["facts"], user_id)
+        total_time = time.time() - start_time
+        return {
+            "classified_facts": classified_facts,
+            "processing_mode": "sync",
+            "added_count": result["added_count"],
+            "updated_count": result.get("updated_count", 0),
+            "stats": result.get("stats", {}),
+            "total_time": total_time
+        }
 
     def _extract_roleplay_facts(self, user_messages):
         """提取角色扮演专用事实 - 保留完整对话上下文"""
@@ -123,66 +112,67 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
 
     def _create_enhanced_roleplay_prompt(self):
         """优化版角色扮演提示词 - 保持原始角色称谓"""
-        return """# 角色：角色扮演记忆分析师
-        ## 核心任务：
-        从角色扮演对话中提取user（用户）的重要发言，进行智能分类和重要性评估。
+        return """
+# 角色：角色扮演记忆分析师
+## 核心任务：
+从角色扮演对话中精准提取用户的重要信息，进行智能分类和重要性评估。
 
-        ## 重要说明：
-        - 记录user用户称为用户，assistant用户称为助手。
+## 重要说明：
+- 用户：指user发言的角色
+- 助手：指assistant发言的角色
+- **所有记忆描述必须简洁、客观，使用第三人称，严禁揣测意图**
 
-        ## 分类指南：
+## 分类标准与示例：
 
-        ### 📋 profile (用户档案) - 身份核心信息
-        - 用户的身份设定、背景故事
-        - 用户的特征、能力、限制
-        - 用户的基本信息、偏好、禁忌
-        - *重要性：high*
+### 📋 profile (用户档案) - 身份核心信息 [重要性：high]
+- 身份设定：角色身份、背景故事
+- 基本属性：名字、年龄、特征
+- 联系方式：电话、社交账号等
+- 健康限制：疾病、过敏等
+- **要求：提取最简洁的核心信息**
+- 示例："用户自称良人君","电话号码:18800006270","有痔疮","忌辣"
 
-        ### 🔄 behavioral_patterns (互动模式) - 行为习惯  
-        - 用户的说话风格和回应模式
-        - 用户的互动偏好和情感态度
-        - 用户的行为习惯和反应方式
-        - 用户和助手为自己定义的名字，别称等
-        - *重要性：medium*
+### 🔄 behavioral_patterns (行为模式) - 互动习惯 [重要性：medium]  
+- 说话风格：礼貌用语、幽默方式等
+- 互动偏好：主动邀请、回应模式
+- 情感态度：友好、期待等表达方式
+- 示例："用户使用'哈哈'等轻松语气交流"
 
-        ### 💭 internal_monologue (内心活动) - 真实想法
-        - 用户表达的真实想法和感受
-        - 用户的情绪变化和内心矛盾
-        - 用户未明确表达的隐藏动机
-        - *重要性：根据情感强度*
+### 💭 internal_monologue (内心活动) - 真实感受 [重要性：根据情感强度]
+- 明确表达的情绪：喜欢、担心、期待
+- 直接陈述的感受和想法
+- **严禁使用'可能''隐含'等推测词汇**
+- 示例："用户表达对助手未联系的失望"
 
-        ### 🎭 roleplay_scenarios (扮演场景) - 剧情偏好
-        - 用户喜欢的题材和剧情类型
-        - 用户偏好的场景设定和情节
-        - 用户想体验的角色和情境
-        - *重要性：low*
+### 🎭 roleplay_scenarios (扮演场景) - 剧情设定 [重要性：low]
+- 偏好的剧情类型和题材
+- 具体的场景设定要求
+- 示例："用户提议一起看动漫"
 
-        ### ⏰ event (事件记录) - 具体经历
-        - 用户描述的经历或计划
-        - 用户的行动记录和打算
-        - 用户提到的重要时间节点
-        - *重要性：根据事件重要性*
+### ⏰ event (事件记录) - 具体行动 [重要性：根据事件重要性]
+- 已发生或计划的具体事件
+- 行动记录和时间节点
+- 示例："用户邀请助手一起吃午饭"
 
-        ### 💬 interaction (互动交流) - 对话内容
-        - 用户的一般性对话和交流
-        - 用户的提问和简单回应
-        - 临时的对话片段
-        - *重要性：low*
+### 💬 interaction (日常对话) - 一般交流 [重要性：low]
+- 简单的问候和寒暄
+- 临时的对话片段
+- 无实质内容的交流
 
-        用户和助手的对话记录：
-        {user_messages}
+用户和助手的对话记录：
+{user_messages}
 
-        请按以下JSON格式返回分类结果：
-        {{
-        "facts": [
-            {{
-            "content": "以第三人称视角来描述用户的事件行为或者心理，不要去揣测意图。",
-            "category": "分类类型", 
-            "importance": "重要性级别",
-            "reasoning": "分类理由"
-            }}
-        ]
-        }}"""
+请按以下JSON格式返回分类结果：
+{{
+"facts": [
+    {{
+    "content": "简洁客观的第三人称描述，直接提取用户明确表达的内容",
+    "category": "分类类型", 
+    "importance": "high/medium/low",
+    "reasoning": "具体的分类理由，基于明确标准"
+    }}
+]
+}}"""
 
     def _call_llm_for_roleplay_classification(self, prompt_content):
         """调用LLM进行角色扮演分类 - 兼容各种格式的响应"""

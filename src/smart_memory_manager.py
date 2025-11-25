@@ -386,7 +386,7 @@ class SmartMemoryManager:
         # if agent_id:
         #     filterQuery['agent_id'] = agent_id
         
-        results = self.memory.search(query, user_id=user_id,filters=filterQuery,limit=limit, rerank=True)
+        results = self.memory.search(query, user_id=user_id,filters=filterQuery,limit=limit, rerank=False)
         
         # 严格过滤已删除的记忆
         if exclude_deleted:

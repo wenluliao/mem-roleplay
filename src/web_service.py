@@ -104,6 +104,8 @@ class AddMemoryResponse(BaseModel):
     task_id: Optional[str] = None  # 修复：改为 Optional
     queue_length: int = 0
     facts_count: int = 0
+    added_count: Optional[int] = None  # 添加added_count字段
+    processing_mode: Optional[str] = None  # 添加processing_mode字段
 
 
 class SearchMemoryResponse(BaseModel):
@@ -223,18 +225,43 @@ async def add_conversation_memory(request: ConversationRequest):
             logger.info(f"会话日期: {request.session_date}")
         
         manager = get_roleplay_manager()
-        result = manager.add_conversation_with_roleplay_classification(
-            request.dialogue,
-            request.user_id
-        )
         
-        return AddMemoryResponse(
-            status="success",
-            message="对话记忆添加成功",
-            task_id=result.get("task_id"),
-            queue_length=result.get("queue_length", 0),
-            facts_count=result.get("facts_count", 0)
-        )
+        # 强制异步处理，不等待结果直接返回成功
+        if hasattr(manager, 'async_processor') and manager.async_processor:
+            # 使用异步队列处理
+            task_id = manager.async_processor.add_conversation_task(
+                request.dialogue,
+                request.user_id
+            )
+            queue_length = manager.async_processor.redis_client.llen(manager.async_processor.queue_name)
+            
+            return AddMemoryResponse(
+                status="success",
+                message="对话记忆已加入异步处理队列",
+                task_id=task_id,
+                queue_length=queue_length
+            )
+        else:
+            # 如果没有异步处理器，使用同步处理但立即返回
+            import threading
+            
+            def async_process():
+                try:
+                    manager.add_conversation_with_roleplay_classification(
+                        request.dialogue,
+                        request.user_id
+                    )
+                except Exception as e:
+                    logger.error(f"异步处理对话记忆失败: {e}")
+            
+            # 启动异步线程处理
+            thread = threading.Thread(target=async_process, daemon=True)
+            thread.start()
+            
+            return AddMemoryResponse(
+                status="success",
+                message="对话记忆已开始异步处理"
+            )
         
     except Exception as e:
         logger.error(f"添加对话记忆失败: {e}")

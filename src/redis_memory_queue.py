@@ -55,7 +55,8 @@ class RedisMemoryQueue:
                 "facts": facts,
                 "user_id": user_id,
                 "timestamp": time.time(),
-                "task_id": f"{user_id}_{int(time.time()*1000)}"
+                "task_id": f"{user_id}_{int(time.time()*1000)}",
+                "type": "memory_storage"  # 标记为记忆存储任务
             }
             
             # 添加到Redis队列
@@ -79,6 +80,41 @@ class RedisMemoryQueue:
                 "status": "error",
                 "error": str(e)
             }
+    
+    def add_conversation_task(self, messages: List[Dict[str, Any]], user_id: str) -> str:
+        """
+        添加对话处理任务到队列 - 用于异步处理完整的对话分类流程
+        
+        Args:
+            messages: 对话消息列表
+            user_id: 用户ID
+            
+        Returns:
+            任务ID
+        """
+        try:
+            # 创建任务数据
+            task_data = {
+                "messages": messages,
+                "user_id": user_id,
+                "timestamp": time.time(),
+                "task_id": f"{user_id}_{int(time.time()*1000)}",
+                "type": "conversation_processing"  # 标记为对话处理任务
+            }
+            
+            # 添加到Redis队列
+            self.redis_client.rpush(self.queue_name, json.dumps(task_data))
+            
+            # 获取队列长度
+            queue_length = self.redis_client.llen(self.queue_name)
+            
+            logger.info(f"成功添加对话处理任务到队列，用户: {user_id}, 队列长度: {queue_length}")
+            
+            return task_data["task_id"]
+            
+        except Exception as e:
+            logger.error(f"添加对话处理任务到队列失败: {e}")
+            raise e
     
     def start_processing(self, batch_size: int = 10, sleep_interval: float = 1.0):
         """
@@ -148,23 +184,39 @@ class RedisMemoryQueue:
             tasks: 任务列表
         """
         try:
-            # 按用户分组处理
-            user_tasks = {}
             for task in tasks:
+                task_type = task.get("type", "memory_storage")
                 user_id = task["user_id"]
-                if user_id not in user_tasks:
-                    user_tasks[user_id] = []
-                user_tasks[user_id].extend(task["facts"])
-            
-            # 为每个用户批量添加记忆
-            for user_id, facts in user_tasks.items():
-                try:
-                    # 调用同步方法批量添加记忆
-                    result = self.memory_manager.add_roleplay_memories_batch(facts, user_id)
-                    logger.info(f"用户 {user_id} 的记忆批量添加成功，数量: {len(facts)}")
-                except Exception as e:
-                    logger.error(f"用户 {user_id} 的记忆添加失败: {e}")
-                    
+                
+                if task_type == "memory_storage":
+                    # 处理记忆存储任务
+                    facts = task.get("facts", [])
+                    try:
+                        result = self.memory_manager.add_roleplay_memories_batch(facts, user_id)
+                        logger.info(f"用户 {user_id} 的记忆批量添加成功，数量: {len(facts)}")
+                    except Exception as e:
+                        logger.error(f"用户 {user_id} 的记忆添加失败: {e}")
+                        
+                elif task_type == "conversation_processing":
+                    # 处理对话处理任务 - 完整的分类和存储流程
+                    messages = task.get("messages", [])
+                    try:
+                        # 在后台线程中完成整个处理流程
+                        print("🎭 开始角色扮演记忆分类...")
+                        start_time = time.time()
+                        
+                        # 提取角色扮演事实
+                        classified_facts = self.memory_manager._extract_roleplay_facts(messages)
+                        
+                        classification_time = time.time() - start_time
+                        print(f"🎭 分类完成，耗时: {classification_time:.2f}s")
+                        
+                        # 存储分类结果
+                        result = self.memory_manager.add_roleplay_memories_batch(classified_facts["facts"], user_id)
+                        logger.info(f"用户 {user_id} 的对话处理完成，记忆数量: {len(classified_facts.get('facts', []))}")
+                    except Exception as e:
+                        logger.error(f"用户 {user_id} 的对话处理失败: {e}")
+                        
         except Exception as e:
             logger.error(f"批量处理任务失败: {e}")
     
