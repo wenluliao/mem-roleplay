@@ -1,43 +1,39 @@
-# 🎭 Mem0AI 角色扮演智能记忆系统
+# 🎭 Mem-Roleplay 角色扮演智能记忆系统
 
-基于Mem0库构建的专门针对角色扮演场景优化的智能记忆管理系统，提供对话记忆管理、角色档案构建、行为模式分析等高级功能。
+专为角色扮演场景优化的智能记忆管理系统，提供对话记忆管理、角色档案构建、行为模式分析等高级功能，支持异步处理和Web服务接口。
 
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Mem0](https://img.shields.io/badge/built%20with-Mem0-orange.svg)](https://github.com/mem0ai/mem0)
-[![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek_V3.2-brightgreen.svg)](https://www.deepseek.com/)
+[![FastAPI](https://img.shields.io/badge/Framework-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
+[![Redis](https://img.shields.io/badge/Queue-Redis-DC382D.svg)](https://redis.io/)
 
 ## ✨ 核心特性
 
 ### 🎯 角色扮演专用优化
-- **智能记忆分类**: 自动识别和分类角色扮演相关记忆
+- **智能记忆分类**: 基于LLM自动识别和分类角色扮演相关记忆
 - **角色档案构建**: 自动构建用户角色档案和行为模式
 - **场景上下文管理**: 维护角色扮演的完整上下文信息
-- **内心活动记录**: 捕捉用户的真实想法和情感变化
 - **冲突检测机制**: 智能识别重复或冲突记忆，支持更新而非覆盖
-- **批量异步处理**: 支持Redis队列异步处理记忆批次
+- **异步处理支持**: 支持Redis队列异步处理对话记忆
 
 ### 🔧 技术特性
-- **多LLM支持**: 支持DeepSeek V3.2、Ollama等多种LLM后端
+- **LLM支持**: 支持DeepSeek V3.2等LLM后端
 - **智能向量检索**: 基于语义的智能记忆搜索和匹配
-- **性能监控**: 内置性能监控和优化工具
+- **异步任务队列**: 基于Redis的异步处理架构
+- **Web服务接口**: 提供RESTful API接口，支持HTTP调用
 - **模块化架构**: 清晰的代码结构，易于扩展和维护
-- **异步任务队列**: 基于Celery+Redis的异步处理架构
-- **批量LLM推理**: 批量处理记忆减少API调用开销
 
 ### 📊 记忆管理
 - **7种记忆分类**: profile、behavioral_patterns、internal_monologue等
 - **重要性分级**: 高、中、低三级重要性标记
 - **生命周期管理**: 支持记忆更新、删除、清理、合并
 - **访问统计**: 详细的记忆访问和使用统计
-- **智能处理策略**: ADD/UPDATE/DELETE/NOOP四种处理模式
 
 ## 🚀 快速开始
 
 ### 系统要求
-
 - Python 3.8+
-- 至少2GB可用内存
+- Redis服务器（用于异步处理）
 - 支持向量数据库（ChromaDB）
 
 ### 安装步骤
@@ -45,7 +41,7 @@
 ```bash
 # 克隆项目
 git clone <repository-url>
-cd mem0ai
+cd mem-roleplay
 
 # 创建虚拟环境（推荐）
 python -m venv .venv
@@ -58,6 +54,7 @@ source .venv/bin/activate
 
 # 安装依赖
 pip install -r requirements.txt
+pip install -r requirements_web.txt
 ```
 
 ### 环境配置
@@ -67,172 +64,160 @@ pip install -r requirements.txt
 ```bash
 # .env 文件示例
 OPENAI_API_KEY="your-api-key"
-OLLAMA_BASE_URL="http://localhost:11434"
-DEBUG=false
+OPENAI_BASE_URL="https://api.siliconflow.cn/v1"
+LOG_LEVEL="INFO"
+
+# Redis配置（用于异步处理）
+REDIS_URL="redis://localhost:6379/0"
 ```
 
 ## 📖 基础使用
 
-### 初始化应用
+### 启动Web服务
 
-```python
-from src.app import Mem0App
+```bash
+# 启动Web服务（支持异步处理）
+python run_web_service.py
 
-# 初始化角色扮演专用应用
-app = Mem0App()
-print("🎭 角色扮演记忆系统初始化完成")
+# 服务启动后，访问 http://localhost:8000 查看API文档
 ```
 
-### 添加角色扮演对话
+### 通过HTTP API添加角色扮演对话
 
 ```python
-# 示例角色扮演对话
-roleplay_messages = [
-    {"role": "user", "content": "我是来自未来的时间旅行者，专门研究古代文明"},
-    {"role": "assistant", "content": "听起来很酷！你最喜欢研究哪个时期的文明？"},
-    {"role": "user", "content": "我对古埃及特别着迷，尤其是金字塔的建造技术"},
-    {"role": "assistant", "content": "金字塔确实很神秘。你有什么特别的发现吗？"},
-    {"role": "user", "content": "我发现古埃及人可能使用了某种失传的能量技术"}
-]
+import requests
 
-# 添加对话并启用角色扮演分类
-result = app.add_conversation(
-    roleplay_messages, 
-    user_id="time_traveler_001",
-    enable_roleplay_classification=True
-)
-print(f"✅ 添加结果: {result['added_count']} 条记忆")
+# Web服务地址
+BASE_URL = "http://localhost:8000"
+
+# 异步添加对话记忆
+payload = {
+    "conversation": [
+        {"role": "user", "content": "我是来自未来的时间旅行者，专门研究古代文明"},
+        {"role": "assistant", "content": "听起来很酷！你最喜欢研究哪个时期的文明？"},
+        {"role": "user", "content": "我对古埃及特别着迷，尤其是金字塔的建造技术"}
+    ],
+    "user_id": "time_traveler_001",
+    "user_name": "时间旅行者"
+}
+
+response = requests.post(f"{BASE_URL}/api/v1/conversation/add", json=payload)
+result = response.json()
+
+print(f"✅ 添加结果: {result}")
+if result.get('task_id'):
+    print(f"异步任务ID: {result['task_id']}")
+    print(f"队列长度: {result.get('queue_length', 0)}")
 ```
 
-### 智能搜索记忆
+### 搜索记忆
 
 ```python
-# 搜索角色档案信息
-profile_results = app.search_by_category("profile", "time_traveler_001")
-app.print_search_results(profile_results, "角色档案")
+# 搜索特定用户的记忆
+search_payload = {
+    "user_id": "time_traveler_001",
+    "query": "古埃及"
+}
 
-# 搜索行为模式
-behavior_results = app.search_by_category("behavioral_patterns", "time_traveler_001")
-app.print_search_results(behavior_results, "行为模式")
+response = requests.post(f"{BASE_URL}/api/v1/memory/search", json=search_payload)
+search_result = response.json()
+
+print(f"🔍 搜索结果: {len(search_result.get('results', []))} 条相关记忆")
 ```
 
-### 查看角色档案
+### 查看记忆统计
 
 ```python
-# 获取完整的角色档案
-profile = app.get_roleplay_profile("time_traveler_001")
-print(f"🎭 角色档案摘要:")
-print(f"身份特征: {profile['total_traits']} 项")
-print(f"行为模式: {profile['pattern_count']} 种")
-print(f"场景偏好: {profile['scenario_count']} 类")
+# 获取用户记忆统计
+stats_response = requests.get(f"{BASE_URL}/api/v1/memory/stats/time_traveler_001")
+stats = stats_response.json()
 
-# 打印详细档案
-app.print_character_profile("time_traveler_001")
+print(f"📊 记忆统计:")
+print(f"总记忆数: {stats.get('total_memories', 0)}")
+print(f"分类统计: {stats.get('category_stats', {})}")
 ```
 
 ## 🔧 高级功能
 
-### 自定义配置
+### 异步处理模式
+
+系统默认启用异步处理，对话记忆添加请求会立即返回，后台自动处理分类和存储。
 
 ```python
-# 自定义LLM配置
-custom_config = {
-    "llm": {
-        "provider": "openai",
-        "config": {
-            "model": "deepseek-ai/DeepSeek-V3.2-Exp",
-            "openai_base_url": "https://api.siliconflow.cn/v1",
-            "temperature": 0.2
-        }
-    },
-    "embedder": {
-        "provider": "ollama", 
-        "config": {
-            "model": "qwen3-embedding:0.6b",
-            "ollama_base_url": "http://localhost:11434"
-        }
-    }
+import requests
+
+# 异步添加对话（默认模式）
+payload = {
+    "conversation": [
+        {"role": "user", "content": "我喜欢科幻题材的角色扮演"},
+        {"role": "assistant", "content": "科幻确实很有趣！"}
+    ],
+    "user_id": "async_user",
+    "user_name": "异步用户"
 }
 
-app = Mem0App(config_overrides=custom_config)
+response = requests.post("http://localhost:8000/api/v1/conversation/add", json=payload)
+result = response.json()
+
+if result["status"] == "success":
+    if result.get("task_id"):
+        print(f"✅ 异步任务已提交，任务ID: {result['task_id']}")
+        print(f"当前队列长度: {result.get('queue_length', 0)}")
+    else:
+        print("✅ 任务已通过线程池异步处理")
 ```
 
-### 批量记忆操作
+### 队列状态监控
 
 ```python
-# 批量添加多个对话场景
-scenarios = [
-    [{"role": "user", "content": "我喜欢科幻题材的角色扮演"}],
-    [{"role": "user", "content": "我擅长扮演神秘的外星生物"}],
-    [{"role": "user", "content": "我对魔法世界设定特别感兴趣"}]
-]
+# 查看异步队列状态
+response = requests.get("http://localhost:8000/api/v1/queue/status")
+queue_status = response.json()
 
-for i, scenario in enumerate(scenarios):
-    app.add_conversation(scenario, user_id=f"roleplayer_{i:03d}")
+print(f"📊 队列状态:")
+print(f"活跃任务数: {queue_status.get('active_tasks', 0)}")
+print(f"待处理任务数: {queue_status.get('pending_tasks', 0)}")
 ```
 
-### 记忆清理和优化
+### 记忆分类查询
 
 ```python
-# 清理过期记忆
-cleanup_result = app.cleanup_memories("time_traveler_001")
-print(f"🧹 清理完成: {cleanup_result}")
+# 按分类查询记忆
+categories = ["profile", "behavioral_patterns", "roleplay_scenarios", "event", "interaction"]
 
-# 强制删除特定记忆
-deleted_count = app.force_delete_memory("测试数据", "time_traveler_001")
-print(f"💥 强制删除: {deleted_count} 条记忆")
-```
-
-### 异步记忆处理
-
-```python
-# 启用异步处理（需要Redis服务）
-app = Mem0App(use_async=True)
-
-# 添加对话，自动使用异步队列
-result = app.add_conversation(
-    roleplay_messages, 
-    user_id="async_user",
-    enable_roleplay_classification=True
-)
-
-print(f"📤 异步任务ID: {result.get('task_id')}")
-print(f"处理模式: {result.get('processing_mode')}")
-```
-
-### 智能冲突检测
-
-```python
-# 添加可能冲突的记忆
-conflicting_messages = [
-    {"role": "user", "content": "我喜欢科幻题材"},
-    {"role": "user", "content": "我其实更喜欢奇幻题材"}
-]
-
-# 系统会自动检测冲突并智能处理
-result = app.add_conversation(conflicting_messages, "conflict_test", True)
-
-# 查看处理结果
-for fact in result["classified_facts"]["facts"]:
-    print(f"{fact['category']}: {fact['content']} -> {fact.get('processing', 'ADD')}")
+for category in categories:
+    payload = {
+        "user_id": "test_user",
+        "query": "角色",
+        "category": category
+    }
+    
+    response = requests.post("http://localhost:8000/api/v1/memory/search", json=payload)
+    result = response.json()
+    
+    print(f"{category} 分类: {len(result.get('results', []))} 条记忆")
 ```
 
 ## 🏗️ 项目架构
 
 ```
-mem0ai/
+mem-roleplay/
 ├── src/                           # 源代码目录
-│   ├── config.py                 # 配置管理（支持DeepSeek V3.2）
-│   ├── app.py                    # 主应用类（角色扮演优化版）
-│   ├── roleplay_smart_memory_manager.py  # 角色扮演记忆管理器（含冲突检测）
+│   ├── config.py                 # 配置管理
+│   ├── app.py                    # 主应用类
+│   ├── roleplay_smart_memory_manager.py  # 角色扮演记忆管理器（核心分类逻辑）
 │   ├── smart_memory_manager.py   # 基础记忆管理器
-│   ├── tasks.py                  # Celery异步任务定义
-│   └── utils.py                  # 工具函数和性能监控
+│   ├── redis_memory_queue.py     # Redis异步队列处理器
+│   ├── web_service.py            # FastAPI Web服务接口
+│   └── utils.py                  # 工具函数
+├── templates/                     # HTML模板目录
+│   └── memory_query.html         # 记忆查询页面
 ├── test/                         # 测试目录
-│   ├── test_ollama.py            # Ollama集成测试
-│   └── test_performance_optimized.py  # 性能测试
-├── db/                           # 向量数据库存储
-├── requirements.txt              # 依赖管理
+│   ├── test_http_client.py       # HTTP客户端测试
+│   └── test_async_functionality.py  # 异步功能测试
+├── requirements.txt              # 核心依赖
+├── requirements_web.txt          # Web服务依赖
+├── run_web_service.py            # Web服务启动脚本
 └── README.md                    # 项目文档
 ```
 
@@ -250,235 +235,105 @@ mem0ai/
 | `event` | 事件记录 | 具体经历、行动记录、时间节点 | 动态 |
 | `interaction` | 互动交流 | 一般对话、提问回应、临时片段 | Low |
 
-### 使用示例
+## 🔌 API接口文档
 
-```python
-# 按分类搜索记忆
-scenario_memories = app.search_by_category("roleplay_scenarios", "user123")
-internal_thoughts = app.search_by_category("internal_monologue", "user123")
+### 添加对话记忆（异步处理）
 
-# 获取分类统计
-stats = app.get_category_statistics("user123")
-for category, info in stats['categories'].items():
-    print(f"{category}: {info['count']} 条 ({info['percentage']:.1f}%)")
-```
+**POST** `/api/v1/conversation/add`
 
-## ⚙️ 配置详解
+添加角色扮演对话记忆，系统会自动进行智能分类和存储。
 
-### 默认配置结构
-
-```python
+**请求体:**
+```json
 {
-    "llm": {
-        "provider": "openai",
-        "config": {
-            "model": "deepseek-ai/DeepSeek-V3.2-Exp",
-            "temperature": 0.2,
-            "max_tokens": 2000,
-            "openai_base_url": "https://api.siliconflow.cn/v1"
-        }
-    },
-    "embedder": {
-        "provider": "ollama",
-        "config": {
-            "model": "qwen3-embedding:0.6b", 
-            "ollama_base_url": "http://localhost:11434"
-        }
-    },
-    "vector_store": {
-        "provider": "chroma",
-        "config": {
-            "collection_name": "test",
-            "path": "db"
-        }
-    }
+    "conversation": [
+        {"role": "user", "content": "对话内容"},
+        {"role": "assistant", "content": "回复内容"}
+    ],
+    "user_id": "用户ID",
+    "user_name": "用户名"
 }
 ```
 
-### 支持的LLM后端
+**响应示例:**
+```json
+{
+    "status": "success",
+    "task_id": "async_task_123",
+    "queue_length": 5,
+    "processing_mode": "redis_queue"
+}
+```
 
-- **DeepSeek V3.2**: 通过SiliconFlow API访问
-- **Ollama**: 本地部署的LLM服务
-- **OpenAI**: 标准的OpenAI API
+### 搜索记忆
 
-### 环境变量配置
+**POST** `/api/v1/memory/search`
+
+根据查询条件搜索用户的记忆。
+
+**请求体:**
+```json
+{
+    "user_id": "用户ID",
+    "query": "搜索关键词",
+    "category": "可选分类"
+}
+```
+
+### 获取记忆统计
+
+**GET** `/api/v1/memory/stats/{user_id}`
+
+获取指定用户的记忆统计信息。
+
+### 异步队列管理
+
+**GET** `/api/v1/queue/status`
+
+获取异步队列的状态信息。
+
+## ⚙️ 配置说明
+
+### 环境变量
 
 ```bash
 # DeepSeek配置（通过SiliconFlow）
 OPENAI_API_KEY="your-siliconflow-api-key"
 OPENAI_BASE_URL="https://api.siliconflow.cn/v1"
 
-# Ollama配置
-OLLAMA_BASE_URL="http://localhost:11434"
-
 # 应用配置
-DEBUG="true"
 LOG_LEVEL="INFO"
 
-# Celery异步任务配置
-CELERY_BROKER_URL="redis://:password@host:port/db"
-CELERY_RESULT_BACKEND="redis://:password@host:port/db"
+# Redis配置
+REDIS_URL="redis://localhost:6379/0"
 ```
 
-### 异步任务配置
+### 异步处理流程
 
-```python
-# tasks.py - Celery任务定义示例
-from celery import Celery
-
-# 配置Celery应用
-celery_app = Celery('memory_tasks', 
-                    broker='redis://localhost:6379/0',
-                    backend='redis://localhost:6379/0')
-
-@celery_app.task
-def process_memory_batch_async(batch_data):
-    """异步处理记忆批次"""
-    # 实现批量记忆处理逻辑
-    return {"success": True, "processed_count": len(batch_data["facts"])}
-```
-
-## 🔍 开发指南
-
-### 添加新的记忆分类
-
-修改 `roleplay_smart_memory_manager.py` 中的分类系统：
-
-```python
-# 在 __init__ 方法中添加新分类
-self.roleplay_categories = {
-    'profile': '用户档案',
-    'behavioral_patterns': '互动模式',
-    # ... 现有分类
-    'new_category': '新分类描述'  # 添加新分类
-}
-
-# 在提示词模板中添加新分类的描述
-```
-
-### 自定义分类逻辑
-
-```python
-def custom_classification_logic(self, messages):
-    """自定义分类逻辑"""
-    # 实现你的分类算法
-    classified_results = []
-    
-    for message in messages:
-        if self._is_special_pattern(message):
-            classified_results.append({
-                "content": message["content"],
-                "category": "special_category",
-                "importance": "high"
-            })
-    
-    return classified_results
-```
-
-### 性能优化建议
-
-1. **批量操作**: 使用批量API减少网络请求
-2. **缓存策略**: 实现记忆缓存减少重复搜索
-3. **异步处理**: 使用异步IO提高并发性能
-4. **定期清理**: 设置记忆过期策略释放资源
-
-## 🧪 测试和验证
-
-### 运行基础测试
-
-```bash
-# 运行Ollama集成测试
-python test/test_ollama.py
-
-# 运行性能测试
-python test/test_performance_optimized.py
-```
-
-### 验证记忆分类效果
-
-```python
-# 验证分类准确性
-test_messages = [
-    {"role": "user", "content": "我喜欢扮演科幻角色"},
-    {"role": "user", "content": "我对古文明很感兴趣"}
-]
-
-result = app.add_conversation(test_messages, "test_user", True)
-print("分类结果:", result["classified_facts"])
-```
+1. **请求接收**: Web服务接收对话记忆添加请求
+2. **任务分发**: 根据Redis队列可用性决定处理方式
+3. **异步处理**: 后台进行LLM分类和记忆存储
+4. **立即响应**: 接口立即返回任务状态，不阻塞用户
 
 ## 🐛 故障排除
 
 ### 常见问题
 
-#### 1. LLM服务连接失败
-**症状**: `ConnectionError` 或超时
-**解决方案**:
-- 检查API密钥有效性
-- 确认网络连接正常
-- 验证服务端点可访问
+#### 1. Redis连接失败
+**症状**: 异步处理失败，返回线程池处理
+**解决方案**: 检查Redis服务器是否正常运行
 
-#### 2. 记忆分类不准确
-**症状**: 分类结果不符合预期
-**解决方案**:
-- 调整提示词模板
-- 检查对话格式是否正确
-- 验证LLM响应格式
+#### 2. LLM服务连接失败
+**症状**: 记忆分类失败
+**解决方案**: 检查API密钥和网络连接
 
-#### 3. 性能问题
-**症状**: 响应缓慢或内存占用高
-**解决方案**:
-- 启用性能监控
-- 优化批量操作大小
-- 定期清理过期记忆
-
-### 调试模式
-
-启用详细日志输出：
-
-```bash
-# 设置调试模式
-export DEBUG=true
-
-# 运行应用
-python your_script.py
-```
-
-## 🤝 贡献指南
-
-欢迎社区贡献！请遵循以下流程：
-
-1. Fork 项目仓库
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
-
-### 代码规范
-
-- 遵循 PEP 8 代码风格
-- 添加适当的类型注解
-- 编写清晰的文档字符串
-- 确保所有测试通过
+#### 3. 记忆搜索无结果
+**症状**: 搜索返回空结果
+**解决方案**: 确认记忆已成功添加并索引
 
 ## 📄 许可证
 
 本项目基于 MIT 许可证开源 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-## 🙏 致谢
-
-- [Mem0](https://github.com/mem0ai/mem0) - 提供核心记忆管理功能
-- [DeepSeek](https://www.deepseek.com/) - 强大的LLM模型支持
-- [SiliconFlow](https://siliconflow.cn/) - 优质的AI推理服务
-- [Ollama](https://ollama.ai/) - 本地LLM部署方案
-- [ChromaDB](https://github.com/chroma-core/chroma) - 向量数据库支持
-
-## 📞 支持
-
-如有问题或建议，请通过以下方式联系：
-
-- 提交 [Issue](https://github.com/your-repo/issues)
-- 发送邮件至: your-email@example.com
 
 ---
 
@@ -486,4 +341,4 @@ python your_script.py
 
 ---
 
-**最新更新**: 项目已全面优化为角色扮演专用系统，支持DeepSeek V3.2和7种智能记忆分类。
+**项目特色**: 专为角色扮演优化的智能记忆系统，支持7种记忆分类和异步处理。
