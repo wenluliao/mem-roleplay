@@ -19,6 +19,7 @@ flake8>=6.0.0
 # Web框架
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+flask>=2.0.0
 
 # Redis客户端
 redis>=5.0.0
@@ -32,5 +33,6 @@ python-dotenv>=1.0.0
 # 日志管理
 loguru>=0.7.0
 
-# HTTP客户端（可选，用于测试）
+# HTTP客户端
+requests>=2.0.0
 httpx>=0.25.0
