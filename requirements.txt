@@ -36,3 +36,6 @@ loguru>=0.7.0
 # HTTP客户端
 requests>=2.0.0
 httpx>=0.25.0
+
+# Google GenAI
+google-generativeai>=0.3.0
