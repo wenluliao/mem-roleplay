@@ -467,11 +467,11 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
     您需要综合分析以下{len(memory_entries)}条新记忆，并与现有记忆库进行比较，判断每条记忆应该执行的操作。
 
     ## 处理规则
-    - **ADD（新增）**: 记忆内容全新且与现有记忆库不重复
-    - **UPDATE（更新）**: 与现有记忆相似但包含重要新信息或修正，需要更新
-    - **DELETE（删除）**: 与现有记忆完全重复或信息已过时无效  
-    - **MERGE（合并）**: 与现有多条记忆相似但包含重要新信息或修正，需要合并并更新  
-    - **NOOP（无操作）**: 记忆质量差、无法处理或无需记录
+    - **A（新增）**: 记忆内容全新且与现有记忆库不重复
+    - **U（更新）**: 与现有记忆相似但包含重要新信息或修正，需要更新
+    - **D（删除）**: 与现有记忆完全重复或信息已过时无效  
+    - **M（合并）**: 与现有多条记忆相似但包含重要新信息或修正，需要合并并更新  
+    - **N（无操作）**: 记忆质量差、无法处理或无需记录
 
     ## 综合分析指南
     请特别关注：
@@ -486,17 +486,13 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
     ## 输出格式
     请严格按照以下JSON格式返回：
     {{
-        "batch_analysis": "对这批记忆的整体分析说明",
-        "cross_memory_insights": "新旧记忆间的关联性和合并建议", 
         "results": [
             {{
-                "index": 1,
                 "content": "原始内容",
-                "event": "ADD/UPDATE/DELETE/MERGE/NOOP",
-                "reasoning": "详细处理理由，包括与现有记忆的对比分析",
-                "updated_content": "如果是UPDATE，提供合并优化后的内容",
-                "merged_content": "如果是MERGE，提供合并后的内容",
-                "related_existing_ids": ["需要更新或者合并的现有记忆ID列表"]
+                "event": "A/U/D/M/N",
+                "uc": "如果是U，提供合并优化后的内容",
+                "mc": "如果是M，提供合并后的内容",
+                "rid": ["需要更新或者合并的现有记忆ID列表"]
             }}
         ]
     }}"""
@@ -658,20 +654,20 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
                     processed_result = {
                         "id": f"batch_{index}_{int(time.time())}",
                         "memory": item.get("content", original_msg[0]["content"]),
-                        "event": item.get("event", "ADD"),
+                        "event": item.get("event", "A"),
                         "metadata": original_msg[0]["metadata"],
                         "reasoning": item.get("reasoning", "自动处理"),
-                        "related_existing_ids": item.get("related_existing_ids", []),
+                        "rid": item.get("rid", []),
                         "batch_index": index
                     }
                     
                     # 如果是更新操作，添加更新后内容
-                    if item.get("event") == "UPDATE" and item.get("updated_content"):
-                        processed_result["updated_content"] = item["updated_content"]
+                    if item.get("event") == "U" and item.get("uc"):
+                        processed_result["uc"] = item["uc"]
                         
                     # 如果是合并操作，添加合并后内容
-                    if item.get("event") == "MERGE" and item.get("merged_content"):
-                        processed_result["merged_content"] = item["merged_content"]
+                    if item.get("event") == "M" and item.get("mc"):
+                        processed_result["mc"] = item["mc"]
                         
                     processed_results.append(processed_result)
             
@@ -722,7 +718,7 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
             results.append({
                 "id": f"fallback_{i}_{int(time.time())}",
                 "memory": msg["content"],
-                "event": "ADD",
+                "event": "A",
                 "metadata": msg["metadata"],
                 "reasoning": "降级处理：默认添加",
                 "batch_index": i
@@ -735,9 +731,9 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
         
         for result in results:
             try:
-                event = result.get("event", "ADD")
+                event = result.get("event", "A")
                 
-                if event == "ADD":
+                if event == "A":
                     # 添加新记忆
                     add_result = self.memory.add(
                         result["memory"],
@@ -747,19 +743,19 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
                     )
                     actual_results.extend(add_result.get("results", []))
                     
-                elif event == "UPDATE":
+                elif event == "U":
                     # 更新现有记忆（这里需要根据您的记忆系统实现更新逻辑）
                     # 假设您的记忆系统支持更新操作
-                    updated_content = result.get("updated_content", result["memory"])
+                    updated_content = result.get("uc", result["memory"])
                     update_result = self.memory.update(
-                        memory_id=result["related_existing_ids"][0],  # 需要现有记忆的ID
+                        memory_id=result["rid"][0],  # 需要现有记忆的ID
                         data=updated_content
                     )
                     actual_results.extend(update_result.get("results", []))
 
-                elif event == "MERGE":
+                elif event == "M":
                     # 合并现有记忆（这里需要根据您的记忆系统实现合并逻辑）
-                    merged_content = result.get("merged_content", result["memory"])
+                    merged_content = result.get("mc", result["memory"])
                     # 添加新记忆
                     merge_result = self.memory.add(
                         merged_content,
@@ -768,18 +764,18 @@ class RoleplaySmartMemoryManager(SmartMemoryManager):
                         infer=False
                     )
                     # 删除需要合并的记忆
-                    for memory_id in result["related_existing_ids"]:
+                    for memory_id in result["rid"]:
                             delete_result = self.memory.delete(memory_id)
                     actual_results.extend(merge_result.get("results", []))
                     
-                elif event == "DELETE":
+                elif event == "D":
                     # 删除重复记忆 - 保留一个，删除其他重复项
-                    if result.get("related_existing_ids") and len(result["related_existing_ids"]) > 1:
+                    if result.get("rid") and len(result["rid"]) > 1:
                         # 保留第一个记忆，删除其他重复的记忆
-                        for memory_id in result["related_existing_ids"][1:]:
+                        for memory_id in result["rid"][1:]:
                             delete_result = self.memory.delete(memory_id)
                             actual_results.extend(delete_result.get("results", []))
-                        print(f"✅ 删除重复记忆完成：保留1个，删除{len(result['related_existing_ids']) - 1}个")
+                        print(f"✅ 删除重复记忆完成：保留1个，删除{len(result['rid']) - 1}个")
                 
             except Exception as e:
                 print(f"❌ 执行{event}操作失败: {e}")

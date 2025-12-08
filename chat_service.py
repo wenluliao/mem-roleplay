@@ -7,10 +7,9 @@ from datetime import datetime
 from flask import Flask, request, jsonify, Response, stream_with_context
 from dotenv import load_dotenv
 from openai import OpenAI
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
+from google import genai
+from google.genai import types
+
 
 # 配置日志
 logging.basicConfig(
@@ -38,11 +37,10 @@ OPENAI_MODEL = os.getenv("MODEL_NAME")
 
 # 配置Google GenAI客户端
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemini-pro")
+GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemini-2.0-flash")
 
 # 配置MemU API
 MEMU_API_KEY = os.getenv("MEMU_API_KEY", "mu_nckoEtBwEx0E-2tPl3oS2M8-iQDrdvYx2XrbYPCra6dqOjHtpn9t78-fJ7uOtyCaNBFDbG7O2JmGc-XZx-4NNrQYIUnQW2_1z_YQ_A")
-# MEMU_BASE_URL = os.getenv("MEMU_BASE_URL", "https://api.memu.so/api/v1")
 MEMU_BASE_URL = os.getenv("MEMU_BASE_URL", "http://127.0.0.1:8000/api/v1")
 
 # 配置端口
@@ -71,8 +69,9 @@ elif AI_PROVIDER == "google" and genai is not None:
         raise ValueError(error_msg)
     
     # 初始化Google GenAI客户端
-    genai.configure(api_key=GOOGLE_API_KEY)
-    client = genai
+    client = genai.Client(
+        api_key=GOOGLE_API_KEY,
+    )
 else:
     error_msg = f"不支持的AI提供商: {AI_PROVIDER} 或未安装google-generativeai包"
     logging.error(error_msg)
@@ -132,121 +131,34 @@ def preprocess_messages(messages):
     return processed_messages
 
 @app.post('/v1/chat/completions')
-def call_ai_api(messages, stream=False, **kwargs):
-    """调用不同AI提供商的API"""
-    if AI_PROVIDER == "openai":
-        # OpenAI API调用
-        params = {
-            "messages": messages,
-            "model": OPENAI_MODEL,
-            "stream": stream
-        }
-        
-        # 添加可选参数
-        if "temperature" in kwargs:
-            params["temperature"] = kwargs["temperature"]
-        if "max_tokens" in kwargs:
-            params["max_tokens"] = kwargs["max_tokens"]
-        
-        if stream:
-            return client.chat.completions.create(**params)
-        else:
-            return client.chat.completions.create(**params)
-    
-    elif AI_PROVIDER == "google" and genai is not None:
-        # Google GenAI API调用
-        # 转换消息格式为Google GenAI格式
-        google_messages = []
-        for msg in messages:
-            if msg["role"] == "system":
-                google_messages.append({"role": "user", "parts": [{"text": msg["content"]}]})
-            else:
-                google_messages.append({"role": msg["role"], "parts": [{"text": msg["content"]}]})
-        
-        # 创建模型实例
-        model = client.GenerativeModel(GOOGLE_MODEL)
-        
-        if stream:
-            # Google GenAI流式响应
-            return model.generate_content(google_messages, stream=True)
-        else:
-            # Google GenAI非流式响应
-            return model.generate_content(google_messages)
-    
-    else:
-        raise ValueError(f"不支持的AI提供商: {AI_PROVIDER}")
-
-def format_ai_response(response, stream=False):
-    """格式化AI响应为统一格式"""
-    if AI_PROVIDER == "openai":
-        if stream:
-            return response
-        else:
-            return {
-                "id": response.id,
-                "object": "chat.completion",
-                "created": int(response.created),
-                "model": response.model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": response.choices[0].message.role,
-                            "content": response.choices[0].message.content
-                        },
-                        "finish_reason": response.choices[0].finish_reason
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens
-                }
-            }
-    
-    elif AI_PROVIDER == "google" and genai is not None:
-        if stream:
-            return response
-        else:
-            # 生成唯一的ID
-            import uuid
-            response_id = str(uuid.uuid4())
-            
-            return {
-                "id": response_id,
-                "object": "chat.completion",
-                "created": int(datetime.now().timestamp()),
-                "model": GOOGLE_MODEL,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": response.text
-                        },
-                        "finish_reason": "stop"
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": 0,  # Google API不返回token使用情况
-                    "completion_tokens": 0,
-                    "total_tokens": 0
-                }
-            }
-    
-    else:
-        raise ValueError(f"不支持的AI提供商: {AI_PROVIDER}")
-
 def chat_completions():
     """聊天完成API，集成记忆管理，支持流式和非流式响应"""
     data = request.get_json()
     messages = data.get("messages", [])
-    user_id = data.get("user_id","test_user_002")
+    user_id = data.get("user_id", "test_user_002")
     agent_id = data.get("agent_id", "test_user_001")
     stream = data.get("stream", False)
+    
+    # 提取模型参数（如果提供）
+    model = data.get("model")
+    
+    # 设置响应头为SSE
+    headers = {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'  # 禁用Nginx缓冲
+    }
 
     if not messages:
-        return jsonify({"error": "Missing required field: messages"}), 400
+        if stream:
+            def generate_error():
+                error_data = {"error": "Missing required field: messages"}
+                yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+            return Response(generate_error(), headers=headers, mimetype='text/event-stream')
+        else:
+            return jsonify({"error": "Missing required field: messages"}), 400
 
     # 1. 检索相关记忆
     memories = []
@@ -276,7 +188,7 @@ def chat_completions():
             mem_response.raise_for_status()
             response_data = mem_response.json()
 
-            logging.info(json.dumps(response_data, ensure_ascii=False))
+            logging.info(f"Retrieved memories: {json.dumps(response_data, ensure_ascii=False)}")
             
             # 提取记忆项
             if isinstance(response_data, dict) and "results" in response_data:
@@ -295,7 +207,7 @@ def chat_completions():
     # 添加记忆作为上下文
     for mem in memories:
         if isinstance(mem, dict) and mem.get("memory"):
-            combined_messages.append({"role": "user", "content": "记忆："+mem["memory"]})
+            combined_messages.append({"role": "user", "content": "记忆：" + mem["memory"]})
 
     # 添加当前用户消息
     combined_messages.extend(messages)
@@ -305,39 +217,34 @@ def chat_completions():
     
     # 记录预处理结果
     if processed_messages != combined_messages:
-        logging.info(json.dumps(processed_messages, ensure_ascii=False))
+        logging.info(f"Processed messages: {json.dumps(processed_messages, ensure_ascii=False)}")
 
-    # 4. 处理流式和非流式响应
     if stream:
         # 流式响应处理
         @stream_with_context
         def generate_stream():
             full_response_content = ""
-            response_id = None
-            response_model = None
-            response_created = None
             
             try:
-                # 调用AI API获取流式响应
-                ai_response = call_ai_api(processed_messages, stream=True)
-                
                 if AI_PROVIDER == "openai":
+                    # OpenAI API调用
+                    params = {
+                        "messages": processed_messages,
+                        "model": model or OPENAI_MODEL,
+                        "stream": True
+                    }
+                    
+                    # 调用OpenAI API
+                    response_stream = client.chat.completions.create(**params)
+                    
                     # 处理OpenAI流式响应
-                    for chunk in ai_response:
+                    for chunk in response_stream:
                         if chunk.choices and chunk.choices[0].delta:
                             delta = chunk.choices[0].delta
                             
                             # 收集完整的响应内容用于记忆存储
-                            if delta.content:
+                            if delta and delta.content:
                                 full_response_content += delta.content
-                            
-                            # 收集响应元数据
-                            if not response_id:
-                                response_id = chunk.id
-                            if not response_model:
-                                response_model = chunk.model
-                            if not response_created:
-                                response_created = int(chunk.created)
                             
                             chunk_data = {
                                 "id": chunk.id,
@@ -348,25 +255,86 @@ def chat_completions():
                                     {
                                         "index": 0,
                                         "delta": {
-                                            "role": delta.role,
-                                            "content": delta.content
-                                        } if delta.content else {},
+                                            "role": delta.role if delta.role else "assistant",
+                                            "content": delta.content if delta.content else ""
+                                        },
                                         "finish_reason": chunk.choices[0].finish_reason
                                     }
                                 ]
                             }
                             yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
-                
-                elif AI_PROVIDER == "google" and genai is not None:
-                    # 处理Google GenAI流式响应
-                    import uuid
-                    response_id = str(uuid.uuid4())
-                    response_model = GOOGLE_MODEL
-                    response_created = int(datetime.now().timestamp())
                     
-                    for chunk in ai_response:
-                        if chunk.text:
-                            full_response_content += chunk.text
+                    # 发送结束标记
+                    yield "data: [DONE]\n\n"
+                    
+                elif AI_PROVIDER == "google" and genai is not None:
+                    # Google GenAI API调用
+                    import uuid
+                    response_id = f"chatcmpl-{str(uuid.uuid4())}"
+                    response_created = int(datetime.now().timestamp())
+                    response_model = model or GOOGLE_MODEL
+                    
+                    # 转换消息格式为Google GenAI格式
+                    contents = []
+                    system_instruction = ""
+                    
+                    for msg in processed_messages:
+                        if msg["role"] == "system":
+                            system_instruction = msg["content"]
+                        else:
+                            contents.append(
+                                types.Content(
+                                    role="user" if msg["role"] == "user" else "model",
+                                    parts=[types.Part.from_text(text=msg["content"])],
+                                )
+                            )
+                    
+                    # 配置生成参数
+                    generate_content_config = types.GenerateContentConfig(
+                        thinkingConfig={'thinkingBudget': 0},
+                        safety_settings=[
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_HARASSMENT",
+                                threshold="BLOCK_NONE",
+                            ),
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_HATE_SPEECH",
+                                threshold="BLOCK_NONE",
+                            ),
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                                threshold="BLOCK_NONE",
+                            ),
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                                threshold="BLOCK_NONE",
+                            ),
+                        ],
+                        system_instruction=[types.Part.from_text(text=system_instruction)] if system_instruction else None
+                    )
+                    
+                    # 调用Google GenAI API
+                    response_stream = client.models.generate_content_stream(
+                        model=response_model,
+                        contents=contents,
+                        config=generate_content_config,
+                    )
+                    
+                    # 处理Google GenAI流式响应
+                    has_sent_initial_chunk = False
+                    
+                    for chunk in response_stream:
+                        if hasattr(chunk, 'text') and chunk.text:
+                            chunk_text = chunk.text
+                            full_response_content += chunk_text
+                            
+                            # 构建delta
+                            delta = {"content": chunk_text}
+                            
+                            # 第一次发送时包含role
+                            if not has_sent_initial_chunk:
+                                delta["role"] = "assistant"
+                                has_sent_initial_chunk = True
                             
                             chunk_data = {
                                 "id": response_id,
@@ -376,108 +344,218 @@ def chat_completions():
                                 "choices": [
                                     {
                                         "index": 0,
-                                        "delta": {
-                                            "role": "assistant",
-                                            "content": chunk.text
-                                        },
+                                        "delta": delta,
                                         "finish_reason": None
                                     }
                                 ]
                             }
+                            
+                            # 使用SSE格式
                             yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
-                
-                # 发送结束标记
-                yield "data: [DONE]\n\n"
-                
-                # 流式响应完成后，进行记忆存储
-                if use_memory and full_response_content:
-                    try:
-                        # 构建记忆项用于存储
-                        memory_items = []
-                        
-                        # 只添加最后一条用户消息
-                        user_messages = [msg for msg in messages if msg.get("role") == "user"]
-                        if user_messages:
-                            last_user_msg = user_messages[-1]
-                            memory_items.append({
-                                "role": "user",
-                                "content": last_user_msg.get("content", "")
-                            })
-                        
-                        # 添加助手回复
-                        memory_items.append({
-                            "role": "assistant",
-                            "content": full_response_content
-                        })
-
-                        # 根据MemU API文档构建完整的conversation格式
-                        conversation = []
-                        current_time = datetime.now().isoformat()
-                        
-                        for i, item in enumerate(memory_items):
-                            conversation_item = {
-                                "role": item["role"],
-                                "content": item["content"]
+                    
+                    # 发送结束chunk
+                    final_data = {
+                        "id": response_id,
+                        "object": "chat.completion.chunk",
+                        "created": response_created,
+                        "model": response_model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop"
                             }
-                            
-                            # 根据文档添加可选字段
-                            if item["role"] == "user":
-                                conversation_item["name"] = user_id
-                            elif item["role"] == "assistant":
-                                conversation_item["name"] = agent_id
-                            
-                            # 添加时间戳（文档示例格式）
-                            conversation_item["time"] = current_time
-                            
-                            conversation.append(conversation_item)
-                        
-                        # 构建完整的请求体，只提供conversation字段
-                        mem_request_body = {
-                            "conversation": conversation,
-                            "user_id": user_id,
-                            "user_name": user_id,  # 使用user_id作为user_name
-                            "agent_id": agent_id,
-                            "agent_name": agent_id,  # 使用agent_id作为agent_name
-                            "session_date": datetime.now().strftime("%Y-%m-%d")  # 添加会话日期
-                        }
-                        
-                        logging.info(f"Stream mode - MemU memorize request body: {json.dumps(mem_request_body, ensure_ascii=False)}")
-                        
-                        mem_response = requests.post(
-                            f'{MEMU_BASE_URL}/conversation/add',
-                            json=mem_request_body,
-                            headers={
-                                'Authorization': f'Bearer {MEMU_API_KEY}',
-                                'Content-Type': 'application/json; charset=utf-8'
-                            }
-                        )
-                        
-                        # 记录响应状态和内容
-                        logging.info(f"Stream mode - MemU memorize response status: {mem_response.status_code}")
-                        if mem_response.status_code != 200:
-                            logging.error(f"Stream mode - MemU memorize response content: {mem_response.text}")
-                        
-                        mem_response.raise_for_status()
-                        response_data = mem_response.json()
-                        logging.info(f"Stream mode - Successfully memorized conversation, task_id: {response_data.get('task_id', 'unknown')}")
-                            
-                    except Exception as e:
-                        logging.error(f"Stream mode - Error memorizing conversation: {str(e)}")
-                        # 记忆失败时不中断流式响应
-                        
+                        ]
+                    }
+                    yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
+                    
+                    # 发送结束标记
+                    yield "data: [DONE]\n\n"
+                
+                else:
+                    # 不支持的AI提供商
+                    error_data = {"error": f"Unsupported AI provider: {AI_PROVIDER}"}
+                    yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+                
             except Exception as e:
                 logging.error(f"Stream error: {str(e)}")
                 error_data = {"error": str(e)}
                 yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+            
+            # 流式响应完成后，进行记忆存储
+            if use_memory and full_response_content:
+                try:
+                    # 构建记忆项用于存储
+                    memory_items = []
+                    
+                    # 只添加最后一条用户消息
+                    user_messages = [msg for msg in messages if msg.get("role") == "user"]
+                    if user_messages:
+                        last_user_msg = user_messages[-1]
+                        memory_items.append({
+                            "role": "user",
+                            "content": last_user_msg.get("content", "")
+                        })
+                    
+                    # 添加助手回复
+                    memory_items.append({
+                        "role": "assistant",
+                        "content": full_response_content
+                    })
 
-        return Response(generate_stream(), mimetype='text/plain; charset=utf-8')
+                    # 构建完整的请求体
+                    mem_request_body = {
+                        "conversation": memory_items,
+                        "user_id": user_id,
+                        "agent_id": agent_id
+                    }
+                    
+                    logging.info(f"Stream mode - MemU memorize request body: {json.dumps(mem_request_body, ensure_ascii=False)}")
+                    
+                    mem_response = requests.post(
+                        f'{MEMU_BASE_URL}/conversation/add',
+                        json=mem_request_body,
+                        headers={
+                            'Authorization': f'Bearer {MEMU_API_KEY}',
+                            'Content-Type': 'application/json; charset=utf-8'
+                        }
+                    )
+                    
+                    logging.info(f"Stream mode - MemU memorize response status: {mem_response.status_code}")
+                    if mem_response.status_code == 200:
+                        response_data = mem_response.json()
+                        logging.info(f"Stream mode - Successfully memorized conversation, task_id: {response_data.get('task_id', 'unknown')}")
+                    else:
+                        logging.error(f"Stream mode - MemU memorize error: {mem_response.text}")
+                        
+                except Exception as e:
+                    logging.error(f"Stream mode - Error memorizing conversation: {str(e)}")
+
+        return Response(generate_stream(), headers=headers, mimetype='text/event-stream')
     
     else:
         # 非流式响应处理
         try:
-            # 调用AI API
-            ai_response = call_ai_api(processed_messages, stream=False)
-            formatted_response = format_ai_response(ai_response, stream=False)
+            if AI_PROVIDER == "openai":
+                # OpenAI API调用
+                params = {
+                    "messages": processed_messages,
+                    "model": model or OPENAI_MODEL,
+                    "stream": False
+                }
+                
+                response = client.chat.completions.create(**params)
+                
+                # 格式化响应
+                formatted_response = {
+                    "id": response.id,
+                    "object": "chat.completion",
+                    "created": int(response.created),
+                    "model": response.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": response.choices[0].message.role,
+                                "content": response.choices[0].message.content
+                            },
+                            "finish_reason": response.choices[0].finish_reason
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
+                        "completion_tokens": response.usage.completion_tokens if response.usage else 0,
+                        "total_tokens": response.usage.total_tokens if response.usage else 0
+                    }
+                }
+                
+            elif AI_PROVIDER == "google" and genai is not None:
+                # Google GenAI API调用
+                import uuid
+                response_id = f"chatcmpl-{str(uuid.uuid4())}"
+                response_created = int(datetime.now().timestamp())
+                response_model = model or GOOGLE_MODEL
+                
+                # 转换消息格式为Google GenAI格式
+                contents = []
+                system_instruction = ""
+                
+                for msg in processed_messages:
+                    if msg["role"] == "system":
+                        system_instruction = msg["content"]
+                    else:
+                        contents.append(
+                            types.Content(
+                                role="user" if msg["role"] == "user" else "model",
+                                parts=[types.Part.from_text(text=msg["content"])],
+                            )
+                        )
+                
+                # 配置生成参数
+                generate_content_config = types.GenerateContentConfig(
+                    thinkingConfig={'thinkingBudget': 0},
+                    safety_settings=[
+                        types.SafetySetting(
+                            category="HARM_CATEGORY_HARASSMENT",
+                            threshold="BLOCK_NONE",
+                        ),
+                        types.SafetySetting(
+                            category="HARM_CATEGORY_HATE_SPEECH",
+                            threshold="BLOCK_NONE",
+                        ),
+                        types.SafetySetting(
+                            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                            threshold="BLOCK_NONE",
+                        ),
+                        types.SafetySetting(
+                            category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                            threshold="BLOCK_NONE",
+                        ),
+                    ],
+                    system_instruction=[types.Part.from_text(text=system_instruction)] if system_instruction else None
+                )
+                
+                # 调用Google GenAI API
+                response = client.models.generate_content(
+                    model=response_model,
+                    contents=contents,
+                    config=generate_content_config,
+                )
+                
+                # 提取响应文本
+                response_text = ""
+                if hasattr(response, 'text'):
+                    response_text = response.text
+                elif hasattr(response, 'candidates') and response.candidates:
+                    response_text = response.candidates[0].content.parts[0].text if response.candidates[0].content.parts else ""
+                
+                # 格式化响应
+                formatted_response = {
+                    "id": response_id,
+                    "object": "chat.completion",
+                    "created": response_created,
+                    "model": response_model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": response_text
+                            },
+                            "finish_reason": "stop"
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0
+                    }
+                }
+                
+            else:
+                return jsonify({"error": f"Unsupported AI provider: {AI_PROVIDER}"}), 400
             
             # 记忆当前对话
             if use_memory:
@@ -500,41 +578,17 @@ def chat_completions():
                         "content": formatted_response["choices"][0]["message"]["content"]
                     })
 
-                    # 根据MemU API文档构建完整的conversation格式
-                    conversation = []
-                    current_time = datetime.now().isoformat()
-                    
-                    for i, item in enumerate(memory_items):
-                        conversation_item = {
-                            "role": item["role"],
-                            "content": item["content"]
-                        }
-                        
-                        # 根据文档添加可选字段
-                        if item["role"] == "user":
-                            conversation_item["name"] = user_id
-                        elif item["role"] == "assistant":
-                            conversation_item["name"] = agent_id
-                        
-                        # 添加时间戳（文档示例格式）
-                        conversation_item["time"] = current_time
-                        
-                        conversation.append(conversation_item)
-                    
-                    # 构建完整的请求体，只提供conversation字段
+                    # 构建完整的请求体
                     mem_request_body = {
-                        "conversation": conversation,
+                        "conversation": memory_items,
                         "user_id": user_id,
-                        "user_name": user_id,  # 使用user_id作为user_name
-                        "agent_id": agent_id,
-                        "agent_name": agent_id,  # 使用agent_id作为agent_name
-                        "session_date": datetime.now().strftime("%Y-%m-%d")  # 添加会话日期
+                        "agent_id": agent_id
                     }
                     
                     logging.info(f"Non-stream mode - MemU memorize request body: {json.dumps(mem_request_body, ensure_ascii=False)}")
                     
                     mem_response = requests.post(
-                        f'{MEMU_BASE_URL}/memory/memorize',
+                        f'{MEMU_BASE_URL}/conversation/add',
                         json=mem_request_body,
                         headers={
                             'Authorization': f'Bearer {MEMU_API_KEY}',
@@ -542,22 +596,18 @@ def chat_completions():
                         }
                     )
                     
-                    # 记录响应状态和内容
                     logging.info(f"Non-stream mode - MemU memorize response status: {mem_response.status_code}")
-                    if mem_response.status_code != 200:
-                        logging.error(f"Non-stream mode - MemU memorize response content: {mem_response.text}")
-                    
-                    mem_response.raise_for_status()
-                    response_data = mem_response.json()
-                    logging.info(f"Non-stream mode - Successfully memorized conversation, task_id: {response_data.get('task_id', 'unknown')}")
+                    if mem_response.status_code == 200:
+                        response_data = mem_response.json()
+                        logging.info(f"Non-stream mode - Successfully memorized conversation, task_id: {response_data.get('task_id', 'unknown')}")
+                    else:
+                        logging.error(f"Non-stream mode - MemU memorize error: {mem_response.text}")
                         
                 except Exception as e:
                     logging.error(f"Non-stream mode - Error memorizing conversation: {str(e)}")
-                    # 记忆失败时仍返回AI响应
-
-            # 返回非流式响应
+            
             return jsonify(formatted_response), 200
-
+            
         except Exception as e:
             logging.error(f"AI API error: {str(e)}")
             return jsonify({"error": str(e)}), 500
@@ -566,6 +616,22 @@ def chat_completions():
 def health_check():
     """健康检查"""
     return jsonify({"status": "ok"}), 200
+
+@app.get('/')
+def index():
+    """首页"""
+    return jsonify({
+        "service": "Chat API Service",
+        "ai_provider": AI_PROVIDER,
+        "models": {
+            "openai": OPENAI_MODEL if AI_PROVIDER == "openai" else None,
+            "google": GOOGLE_MODEL if AI_PROVIDER == "google" else None
+        },
+        "endpoints": {
+            "chat": "/v1/chat/completions (POST)",
+            "health": "/health (GET)"
+        }
+    }), 200
 
 if __name__ == "__main__":
     logging.info(f"Chat service starting on port {PORT}...")
