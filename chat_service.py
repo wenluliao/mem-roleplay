@@ -569,6 +569,10 @@ def health_check():
 
 if __name__ == "__main__":
     logging.info(f"Chat service starting on port {PORT}...")
-    logging.info(f"OpenAI Model: {OPENAI_MODEL}")
+    logging.info(f"AI Provider: {AI_PROVIDER}")
+    if AI_PROVIDER == "openai":
+        logging.info(f"OpenAI Model: {OPENAI_MODEL}")
+    elif AI_PROVIDER == "google":
+        logging.info(f"Google Model: {GOOGLE_MODEL}")
     logging.info(f"MemU Base URL: {MEMU_BASE_URL}")
     app.run(host='0.0.0.0', port=PORT, debug=True)
