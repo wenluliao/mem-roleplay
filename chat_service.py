@@ -7,6 +7,10 @@ from datetime import datetime
 from flask import Flask, request, jsonify, Response, stream_with_context
 from dotenv import load_dotenv
 from openai import OpenAI
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 # 配置日志
 logging.basicConfig(
@@ -24,10 +28,17 @@ load_dotenv()
 # 初始化Flask应用
 app = Flask(__name__)
 
+# 配置AI客户端
+AI_PROVIDER = os.getenv("AI_PROVIDER", "openai")  # openai 或 google
+
 # 配置OpenAI客户端
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 OPENAI_MODEL = os.getenv("MODEL_NAME")
+
+# 配置Google GenAI客户端
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemini-pro")
 
 # 配置MemU API
 MEMU_API_KEY = os.getenv("MEMU_API_KEY", "mu_nckoEtBwEx0E-2tPl3oS2M8-iQDrdvYx2XrbYPCra6dqOjHtpn9t78-fJ7uOtyCaNBFDbG7O2JmGc-XZx-4NNrQYIUnQW2_1z_YQ_A")
@@ -37,17 +48,35 @@ MEMU_BASE_URL = os.getenv("MEMU_BASE_URL", "http://127.0.0.1:8000/api/v1")
 # 配置端口
 PORT = int(os.getenv("PORT", 25001))
 
-# 检查OpenAI API密钥
-if not OPENAI_API_KEY:
-    error_msg = "OpenAI API密钥未配置，请在.env文件中设置OPENAI_API_KEY"
+# 初始化AI客户端
+client = None
+
+if AI_PROVIDER == "openai":
+    # 检查OpenAI API密钥
+    if not OPENAI_API_KEY:
+        error_msg = "OpenAI API密钥未配置，请在.env文件中设置OPENAI_API_KEY"
+        logging.error(error_msg)
+        raise ValueError(error_msg)
+    
+    # 初始化OpenAI客户端
+    client = OpenAI(
+        api_key=OPENAI_API_KEY,
+        base_url=OPENAI_BASE_URL
+    )
+elif AI_PROVIDER == "google" and genai is not None:
+    # 检查Google API密钥
+    if not GOOGLE_API_KEY:
+        error_msg = "Google API密钥未配置，请在.env文件中设置GOOGLE_API_KEY"
+        logging.error(error_msg)
+        raise ValueError(error_msg)
+    
+    # 初始化Google GenAI客户端
+    genai.configure(api_key=GOOGLE_API_KEY)
+    client = genai
+else:
+    error_msg = f"不支持的AI提供商: {AI_PROVIDER} 或未安装google-generativeai包"
     logging.error(error_msg)
     raise ValueError(error_msg)
-
-# 初始化OpenAI客户端
-client = OpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url=OPENAI_BASE_URL
-)
 
 def filter_sensitive_content(text):
     """过滤敏感内容，避免被ModelScope API拒绝"""
@@ -103,6 +132,111 @@ def preprocess_messages(messages):
     return processed_messages
 
 @app.post('/v1/chat/completions')
+def call_ai_api(messages, stream=False, **kwargs):
+    """调用不同AI提供商的API"""
+    if AI_PROVIDER == "openai":
+        # OpenAI API调用
+        params = {
+            "messages": messages,
+            "model": OPENAI_MODEL,
+            "stream": stream
+        }
+        
+        # 添加可选参数
+        if "temperature" in kwargs:
+            params["temperature"] = kwargs["temperature"]
+        if "max_tokens" in kwargs:
+            params["max_tokens"] = kwargs["max_tokens"]
+        
+        if stream:
+            return client.chat.completions.create(**params)
+        else:
+            return client.chat.completions.create(**params)
+    
+    elif AI_PROVIDER == "google" and genai is not None:
+        # Google GenAI API调用
+        # 转换消息格式为Google GenAI格式
+        google_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                google_messages.append({"role": "user", "parts": [{"text": msg["content"]}]})
+            else:
+                google_messages.append({"role": msg["role"], "parts": [{"text": msg["content"]}]})
+        
+        # 创建模型实例
+        model = client.GenerativeModel(GOOGLE_MODEL)
+        
+        if stream:
+            # Google GenAI流式响应
+            return model.generate_content(google_messages, stream=True)
+        else:
+            # Google GenAI非流式响应
+            return model.generate_content(google_messages)
+    
+    else:
+        raise ValueError(f"不支持的AI提供商: {AI_PROVIDER}")
+
+def format_ai_response(response, stream=False):
+    """格式化AI响应为统一格式"""
+    if AI_PROVIDER == "openai":
+        if stream:
+            return response
+        else:
+            return {
+                "id": response.id,
+                "object": "chat.completion",
+                "created": int(response.created),
+                "model": response.model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": response.choices[0].message.role,
+                            "content": response.choices[0].message.content
+                        },
+                        "finish_reason": response.choices[0].finish_reason
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens
+                }
+            }
+    
+    elif AI_PROVIDER == "google" and genai is not None:
+        if stream:
+            return response
+        else:
+            # 生成唯一的ID
+            import uuid
+            response_id = str(uuid.uuid4())
+            
+            return {
+                "id": response_id,
+                "object": "chat.completion",
+                "created": int(datetime.now().timestamp()),
+                "model": GOOGLE_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": response.text
+                        },
+                        "finish_reason": "stop"
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 0,  # Google API不返回token使用情况
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                }
+            }
+    
+    else:
+        raise ValueError(f"不支持的AI提供商: {AI_PROVIDER}")
+
 def chat_completions():
     """聊天完成API，集成记忆管理，支持流式和非流式响应"""
     data = request.get_json()
@@ -173,12 +307,6 @@ def chat_completions():
     if processed_messages != combined_messages:
         logging.info(json.dumps(processed_messages, ensure_ascii=False))
 
-    # 4. 构建OpenAI API参数
-    params = data.copy()
-    params["messages"] = processed_messages
-    params["model"] = OPENAI_MODEL
-    params.pop("stream_options", None)  # 移除不支持的stream_options参数
-
     # 4. 处理流式和非流式响应
     if stream:
         # 流式响应处理
@@ -190,44 +318,73 @@ def chat_completions():
             response_created = None
             
             try:
-                # 调用OpenAI API获取流式响应（移除user_id等非OpenAI参数）
-                openai_params = {k: v for k, v in params.items() if k not in ['user_id', 'agent_id', 'use_memory']}
-                openai_response = client.chat.completions.create(**openai_params)
+                # 调用AI API获取流式响应
+                ai_response = call_ai_api(processed_messages, stream=True)
                 
-                # 处理流式响应
-                for chunk in openai_response:
-                    if chunk.choices and chunk.choices[0].delta:
-                        delta = chunk.choices[0].delta
-                        
-                        # 收集完整的响应内容用于记忆存储
-                        if delta.content:
-                            full_response_content += delta.content
-                        
-                        # 收集响应元数据
-                        if not response_id:
-                            response_id = chunk.id
-                        if not response_model:
-                            response_model = chunk.model
-                        if not response_created:
-                            response_created = int(chunk.created)
-                        
-                        chunk_data = {
-                            "id": chunk.id,
-                            "object": "chat.completion.chunk",
-                            "created": int(chunk.created),
-                            "model": chunk.model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {
-                                        "role": delta.role,
-                                        "content": delta.content
-                                    } if delta.content else {},
-                                    "finish_reason": chunk.choices[0].finish_reason
-                                }
-                            ]
-                        }
-                        yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+                if AI_PROVIDER == "openai":
+                    # 处理OpenAI流式响应
+                    for chunk in ai_response:
+                        if chunk.choices and chunk.choices[0].delta:
+                            delta = chunk.choices[0].delta
+                            
+                            # 收集完整的响应内容用于记忆存储
+                            if delta.content:
+                                full_response_content += delta.content
+                            
+                            # 收集响应元数据
+                            if not response_id:
+                                response_id = chunk.id
+                            if not response_model:
+                                response_model = chunk.model
+                            if not response_created:
+                                response_created = int(chunk.created)
+                            
+                            chunk_data = {
+                                "id": chunk.id,
+                                "object": "chat.completion.chunk",
+                                "created": int(chunk.created),
+                                "model": chunk.model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {
+                                            "role": delta.role,
+                                            "content": delta.content
+                                        } if delta.content else {},
+                                        "finish_reason": chunk.choices[0].finish_reason
+                                    }
+                                ]
+                            }
+                            yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+                
+                elif AI_PROVIDER == "google" and genai is not None:
+                    # 处理Google GenAI流式响应
+                    import uuid
+                    response_id = str(uuid.uuid4())
+                    response_model = GOOGLE_MODEL
+                    response_created = int(datetime.now().timestamp())
+                    
+                    for chunk in ai_response:
+                        if chunk.text:
+                            full_response_content += chunk.text
+                            
+                            chunk_data = {
+                                "id": response_id,
+                                "object": "chat.completion.chunk",
+                                "created": response_created,
+                                "model": response_model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {
+                                            "role": "assistant",
+                                            "content": chunk.text
+                                        },
+                                        "finish_reason": None
+                                    }
+                                ]
+                            }
+                            yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
                 
                 # 发送结束标记
                 yield "data: [DONE]\n\n"
@@ -318,9 +475,9 @@ def chat_completions():
     else:
         # 非流式响应处理
         try:
-            # 调用OpenAI API（移除user_id等非OpenAI参数）
-            openai_params = {k: v for k, v in params.items() if k not in ['user_id', 'agent_id', 'use_memory']}
-            openai_response = client.chat.completions.create(**openai_params)
+            # 调用AI API
+            ai_response = call_ai_api(processed_messages, stream=False)
+            formatted_response = format_ai_response(ai_response, stream=False)
             
             # 记忆当前对话
             if use_memory:
@@ -340,7 +497,7 @@ def chat_completions():
                     # 添加助手回复
                     memory_items.append({
                         "role": "assistant",
-                        "content": openai_response.choices[0].message.content
+                        "content": formatted_response["choices"][0]["message"]["content"]
                     })
 
                     # 根据MemU API文档构建完整的conversation格式
@@ -396,34 +553,13 @@ def chat_completions():
                         
                 except Exception as e:
                     logging.error(f"Non-stream mode - Error memorizing conversation: {str(e)}")
-                    # 记忆失败时仍返回OpenAI响应
+                    # 记忆失败时仍返回AI响应
 
             # 返回非流式响应
-            response_data = {
-                "id": openai_response.id,
-                "object": "chat.completion",
-                "created": int(openai_response.created),
-                "model": openai_response.model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": openai_response.choices[0].message.role,
-                            "content": openai_response.choices[0].message.content
-                        },
-                        "finish_reason": openai_response.choices[0].finish_reason
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": openai_response.usage.prompt_tokens,
-                    "completion_tokens": openai_response.usage.completion_tokens,
-                    "total_tokens": openai_response.usage.total_tokens
-                }
-            }
-            return jsonify(response_data), 200
+            return jsonify(formatted_response), 200
 
         except Exception as e:
-            logging.error(f"OpenAI API error: {str(e)}")
+            logging.error(f"AI API error: {str(e)}")
             return jsonify({"error": str(e)}), 500
 
 @app.get('/health')
